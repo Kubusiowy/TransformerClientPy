@@ -17,6 +17,8 @@
   "metricsPublishMs": 500,
   "motorBurstSteps": 1,
   "motorStepDelaySec": 0.015,
+  "motorSettleMs": 1200,
+  "motorDirectionInverted": true,
   "motorForwardCommand": "sh ./scripts/drv8825_forward.sh",
   "motorReverseCommand": "sh ./scripts/drv8825_reverse.sh",
   "motorStopCommand": "sh ./scripts/drv8825_stop.sh"

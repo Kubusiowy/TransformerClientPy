@@ -24,6 +24,8 @@ DEFAULT_CLIENT_CONFIG: dict[str, Any] = {
     "metricsPublishMs": 500,
     "motorBurstSteps": 1,
     "motorStepDelaySec": 0.015,
+    "motorSettleMs": 1200,
+    "motorDirectionInverted": True,
     "motorForwardCommand": "",
     "motorReverseCommand": "",
     "motorStopCommand": "",
@@ -50,6 +52,8 @@ class ClientConfig:
     metricsPublishMs: int = DEFAULT_CLIENT_CONFIG["metricsPublishMs"]
     motorBurstSteps: int = DEFAULT_CLIENT_CONFIG["motorBurstSteps"]
     motorStepDelaySec: float = DEFAULT_CLIENT_CONFIG["motorStepDelaySec"]
+    motorSettleMs: int = DEFAULT_CLIENT_CONFIG["motorSettleMs"]
+    motorDirectionInverted: bool = DEFAULT_CLIENT_CONFIG["motorDirectionInverted"]
     motorForwardCommand: str = DEFAULT_CLIENT_CONFIG["motorForwardCommand"]
     motorReverseCommand: str = DEFAULT_CLIENT_CONFIG["motorReverseCommand"]
     motorStopCommand: str = DEFAULT_CLIENT_CONFIG["motorStopCommand"]
@@ -76,6 +80,8 @@ class ClientConfig:
             metricsPublishMs=int(merged["metricsPublishMs"]),
             motorBurstSteps=int(merged["motorBurstSteps"]),
             motorStepDelaySec=float(merged["motorStepDelaySec"]),
+            motorSettleMs=int(merged["motorSettleMs"]),
+            motorDirectionInverted=bool(merged["motorDirectionInverted"]),
             motorForwardCommand=str(merged["motorForwardCommand"]),
             motorReverseCommand=str(merged["motorReverseCommand"]),
             motorStopCommand=str(merged["motorStopCommand"]),
@@ -101,6 +107,8 @@ class ClientConfig:
             "metricsPublishMs": self.metricsPublishMs,
             "motorBurstSteps": self.motorBurstSteps,
             "motorStepDelaySec": self.motorStepDelaySec,
+            "motorSettleMs": self.motorSettleMs,
+            "motorDirectionInverted": self.motorDirectionInverted,
             "motorForwardCommand": self.motorForwardCommand,
             "motorReverseCommand": self.motorReverseCommand,
             "motorStopCommand": self.motorStopCommand,

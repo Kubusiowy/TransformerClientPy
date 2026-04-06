@@ -158,9 +158,9 @@ class MotorControlLoop:
         self._last_key: tuple[int, int] | None = None
         self._last_distance: float | None = None
         self._last_progress_monotonic: float | None = None
-        self._direction_inverted = False
-        self._last_command_logical_direction: str | None = None
-        self._last_command_value: float | None = None
+        self._awaiting_measurement = False
+        self._last_command_seen_update: datetime | None = None
+        self._last_command_monotonic: float | None = None
 
     def update_config(self, config: ClientConfig) -> None:
         self.config = config
@@ -209,12 +209,9 @@ class MotorControlLoop:
                 self._last_key = key
                 self._last_distance = distance
                 self._last_progress_monotonic = time.monotonic()
-                self._direction_inverted = False
-                self._last_command_logical_direction = None
-                self._last_command_value = context.current_value
-
-            if self._detect_wrong_direction(context):
-                continue
+                self._awaiting_measurement = False
+                self._last_command_seen_update = context.last_update
+                self._last_command_monotonic = None
 
             if abs(delta) <= threshold:
                 self._reset_progress_tracking()
@@ -224,6 +221,20 @@ class MotorControlLoop:
                     self._format_motor_message("Osiagnieto target", context),
                 )
                 continue
+
+            if self._awaiting_measurement:
+                if self._has_fresh_measurement(context.last_update):
+                    self._awaiting_measurement = False
+                    self._last_command_seen_update = context.last_update
+                elif not self._settle_timeout_elapsed():
+                    self._set_motor(
+                        "WAITING_MEASUREMENT",
+                        "STOPPED",
+                        self._format_motor_message("Czekam na nowy pomiar po ruchu", context),
+                    )
+                    continue
+                else:
+                    self._awaiting_measurement = False
 
             if self._has_progress(distance):
                 self._last_distance = distance
@@ -243,14 +254,12 @@ class MotorControlLoop:
                     "RUNNING",
                     "FORWARD",
                     self._format_motor_message("Korekta do gory", context),
-                    context.current_value,
                 )
             else:
                 self._issue_direction(
                     "RUNNING",
                     "REVERSE",
                     self._format_motor_message("Korekta w dol", context),
-                    context.current_value,
                 )
 
     def _has_progress(self, distance: float) -> bool:
@@ -275,9 +284,9 @@ class MotorControlLoop:
         self._last_key = None
         self._last_distance = None
         self._last_progress_monotonic = None
-        self._last_command_logical_direction = None
-        self._last_command_value = None
-        self._direction_inverted = False
+        self._awaiting_measurement = False
+        self._last_command_seen_update = None
+        self._last_command_monotonic = None
 
     def _safety_stop(self, message: str) -> None:
         self._reset_progress_tracking()
@@ -298,43 +307,28 @@ class MotorControlLoop:
             f"target={context.target_value:.4f}{unit_suffix}"
         )
 
-    def _issue_direction(self, state_name: str, logical_direction: str, message: str, current_value: float) -> None:
+    def _issue_direction(self, state_name: str, logical_direction: str, message: str) -> None:
         actual_direction = self._map_direction(logical_direction)
-        self._last_command_logical_direction = logical_direction
-        self._last_command_value = current_value
         self._set_motor(state_name, actual_direction, message)
+        self._awaiting_measurement = True
+        self._last_command_monotonic = time.monotonic()
 
     def _map_direction(self, logical_direction: str) -> str:
-        if not self._direction_inverted:
+        if not self.config.motorDirectionInverted:
             return logical_direction
         return "REVERSE" if logical_direction == "FORWARD" else "FORWARD"
 
-    def _detect_wrong_direction(self, context) -> bool:
-        if self._last_command_logical_direction is None or self._last_command_value is None:
+    def _has_fresh_measurement(self, last_update: datetime | None) -> bool:
+        if last_update is None:
             return False
-        movement = context.current_value - self._last_command_value
-        if abs(movement) < self.config.motorProgressEpsilon:
-            return False
+        if self._last_command_seen_update is None:
+            return True
+        return last_update > self._last_command_seen_update
 
-        expected_sign = 1.0 if self._last_command_logical_direction == "FORWARD" else -1.0
-        self._last_command_value = context.current_value
-        if movement * expected_sign > 0:
-            return False
-
-        self._direction_inverted = not self._direction_inverted
-        self._last_progress_monotonic = time.monotonic()
-        self._last_distance = abs(context.target_value - context.current_value)
-        self._last_command_logical_direction = None
-        self.state.set_motor_state(
-            "DIRECTION_CORRECTED",
-            "STOPPED",
-            self._format_motor_message("Wykryto odwrotny kierunek, zamieniam sterowanie", context),
-        )
-        try:
-            self.driver.stop()
-        except Exception:
-            pass
-        return True
+    def _settle_timeout_elapsed(self) -> bool:
+        if self._last_command_monotonic is None:
+            return True
+        return (time.monotonic() - self._last_command_monotonic) >= (max(self.config.motorSettleMs, 100) / 1000.0)
 
     def _set_motor(self, state_name: str, direction: str, message: str) -> None:
         try:
