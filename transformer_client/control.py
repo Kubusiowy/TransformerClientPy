@@ -101,7 +101,7 @@ class CommandMotorDriver:
         self.stop_command = config.motorStopCommand.strip()
         self._last_direction = "STOPPED"
 
-    def set_direction(self, direction: str) -> None:
+    def set_direction(self, direction: str, burst_steps: int | None = None) -> None:
         if direction == "STOPPED" and direction == self._last_direction:
             return
         command = self._command_for(direction)
@@ -122,7 +122,7 @@ class CommandMotorDriver:
             check=False,
             env={
                 **os.environ,
-                "MOTOR_BURST_STEPS": str(self.config.motorBurstSteps),
+                "MOTOR_BURST_STEPS": str(burst_steps if burst_steps is not None else self.config.motorBurstSteps),
                 "MOTOR_STEP_DELAY_SEC": str(self.config.motorStepDelaySec),
                 "MOTOR_ENABLE_DELAY_SEC": str(self.config.motorEnableDelaySec),
                 "MOTOR_MICROSTEP_MODE": str(self.config.motorMicrostepMode),
@@ -341,10 +341,12 @@ class MotorControlLoop:
             self._last_sequence_direction = desired_direction
             self._last_sequence_update = context.last_update
             self._hold_until_monotonic = now_monotonic + settle_seconds
+            burst_steps = self._select_burst_steps(raw_distance)
             self._set_motor(
                 "RUNNING",
                 self._map_direction(desired_direction),
-                self._format_motor_message("Sekwencja korekty", context),
+                self._format_motor_message(f"Sekwencja korekty ({burst_steps} krokow)", context),
+                burst_steps=burst_steps,
             )
 
     def _has_progress(self, distance: float) -> bool:
@@ -412,9 +414,18 @@ class MotorControlLoop:
             return True
         return False
 
-    def _set_motor(self, state_name: str, direction: str, message: str) -> None:
+    def _select_burst_steps(self, distance: float) -> int:
+        if distance > 50:
+            return 50
+        if distance > 20:
+            return 10
+        if distance > 10:
+            return 3
+        return 1
+
+    def _set_motor(self, state_name: str, direction: str, message: str, burst_steps: int | None = None) -> None:
         try:
-            self.driver.set_direction(direction)
+            self.driver.set_direction(direction, burst_steps=burst_steps)
             self.state.set_motor_state(state_name, direction, message)
         except Exception as exc:
             self.state.set_motor_state("ERROR", "STOPPED", str(exc))
