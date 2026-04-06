@@ -218,10 +218,12 @@ class MotorControlLoop:
             current_value = context.current_value
             error = context.target_value - current_value
             raw_distance = abs(error)
-            settle_seconds = max(self.config.motorSettleMs, 0) / 1000.0
+            settle_seconds = self._settle_seconds_for_distance(raw_distance)
             now_monotonic = time.monotonic()
             fresh_sample = self._consume_sample_update(context.last_update)
             desired_direction = "FORWARD" if error > 0 else "REVERSE"
+            burst_steps = self._burst_steps_for_distance(raw_distance)
+            step_delay_sec = self._step_delay_for_distance(raw_distance)
 
             if self._last_key != key:
                 self._last_key = key
@@ -232,13 +234,14 @@ class MotorControlLoop:
                 self._stable_since_monotonic = None
                 self._runtime_direction_inverted = False
                 self.logger.info(
-                    "Simple control init meter=%s register=%s target=%.4f threshold=%.4f live=%.4f unit=%s",
+                    "Microstep control init meter=%s register=%s target=%.4f threshold=%.4f live=%.4f unit=%s microstep_mode=%s",
                     context.meter_id,
                     context.register_id,
                     context.target_value,
                     threshold,
                     current_value,
                     context.unit or "",
+                    self.config.motorMicrostepMode,
                 )
 
             if self._measurement_stale(context.last_update):
@@ -294,7 +297,7 @@ class MotorControlLoop:
                 continue
 
             self.logger.info(
-                "Simple decision meter=%s register=%s live=%.4f target=%.4f error=%.4f distance=%.4f threshold=%.4f direction=%s burst_steps=%s step_delay=%.4f wait_s=%.1f",
+                "Microstep decision meter=%s register=%s live=%.4f target=%.4f error=%.4f distance=%.4f threshold=%.4f direction=%s burst_steps=%s step_delay=%.4f wait_s=%.1f",
                 context.meter_id,
                 context.register_id,
                 current_value,
@@ -303,27 +306,26 @@ class MotorControlLoop:
                 raw_distance,
                 threshold,
                 desired_direction,
-                1,
-                max(self.config.motorStepDelaySec, 0.12),
+                burst_steps,
+                step_delay_sec,
                 settle_seconds,
             )
-            step_delay_sec = max(self.config.motorStepDelaySec, 0.12)
             self._next_action_monotonic = now_monotonic + settle_seconds
             self.logger.info(
-                "Executing simple step meter=%s register=%s direction=%s mapped=%s burst_steps=%s step_delay=%.4f next_wait_s=%.1f",
+                "Executing microstep correction meter=%s register=%s direction=%s mapped=%s burst_steps=%s step_delay=%.4f next_wait_s=%.1f",
                 context.meter_id,
                 context.register_id,
                 desired_direction,
                 self._map_direction(desired_direction),
-                1,
+                burst_steps,
                 step_delay_sec,
                 settle_seconds,
             )
             self._set_motor(
                 "RUNNING",
                 self._map_direction(desired_direction),
-                self._format_motor_message("Maly krok w strone targetu", context),
-                burst_steps=1,
+                self._format_motor_message(f"Mikrokrok korekty ({burst_steps})", context),
+                burst_steps=burst_steps,
                 step_delay_sec=step_delay_sec,
             )
 
@@ -374,6 +376,42 @@ class MotorControlLoop:
         if not effective_inverted:
             return logical_direction
         return "REVERSE" if logical_direction == "FORWARD" else "FORWARD"
+
+    def _microstep_enabled(self) -> bool:
+        return self.config.motorMicrostepMode.upper() != "FULL"
+
+    def _settle_seconds_for_distance(self, distance: float) -> float:
+        base = max(self.config.motorSettleMs, 0) / 1000.0
+        if not self._microstep_enabled():
+            return base
+        if distance > 40:
+            return min(base, 0.8)
+        if distance > 15:
+            return min(base, 1.2)
+        if distance > 5:
+            return min(base, 1.8)
+        return min(base, 2.5)
+
+    def _burst_steps_for_distance(self, distance: float) -> int:
+        if not self._microstep_enabled():
+            return 1
+        if distance > 40:
+            return 4
+        if distance > 15:
+            return 2
+        return 1
+
+    def _step_delay_for_distance(self, distance: float) -> float:
+        base = max(self.config.motorStepDelaySec, 0.05)
+        if not self._microstep_enabled():
+            return max(base, 0.12)
+        if distance > 40:
+            return max(min(base, 0.05), 0.05)
+        if distance > 15:
+            return max(min(base, 0.06), 0.06)
+        if distance > 5:
+            return max(min(base, 0.08), 0.08)
+        return max(min(base, 0.10), 0.10)
 
     def _consume_sample_update(self, last_update: datetime | None) -> bool:
         if last_update is None:
