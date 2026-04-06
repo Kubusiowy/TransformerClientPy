@@ -385,33 +385,33 @@ class MotorControlLoop:
         if not self._microstep_enabled():
             return base
         if distance > 40:
-            return min(base, 0.8)
+            return min(base, 0.5)
         if distance > 15:
-            return min(base, 1.2)
+            return min(base, 0.8)
         if distance > 5:
-            return min(base, 1.8)
-        return min(base, 2.5)
+            return min(base, 1.2)
+        return min(base, 1.6)
 
     def _burst_steps_for_distance(self, distance: float) -> int:
         if not self._microstep_enabled():
             return 1
         if distance > 40:
-            return 4
+            return 8
         if distance > 15:
-            return 2
-        return 1
+            return 4
+        return 2
 
     def _step_delay_for_distance(self, distance: float) -> float:
-        base = max(self.config.motorStepDelaySec, 0.05)
+        base = max(self.config.motorStepDelaySec, 0.03)
         if not self._microstep_enabled():
             return max(base, 0.12)
         if distance > 40:
-            return max(min(base, 0.05), 0.05)
+            return max(min(base, 0.03), 0.03)
         if distance > 15:
-            return max(min(base, 0.06), 0.06)
+            return max(min(base, 0.04), 0.04)
         if distance > 5:
-            return max(min(base, 0.08), 0.08)
-        return max(min(base, 0.10), 0.10)
+            return max(min(base, 0.05), 0.05)
+        return max(min(base, 0.07), 0.07)
 
     def _consume_sample_update(self, last_update: datetime | None) -> bool:
         if last_update is None:
