@@ -17,7 +17,7 @@
   "metricsPublishMs": 500,
   "motorBurstSteps": 1,
   "motorStepDelaySec": 0.08,
-  "motorSettleMs": 3000,
+  "motorSettleMs": 5000,
   "motorDirectionInverted": true,
   "motorMicrostepMode": "FULL",
   "motorM0Pin": null,

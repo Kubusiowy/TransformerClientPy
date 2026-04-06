@@ -285,10 +285,11 @@ class MotorControlLoop:
                 continue
 
             if self._hold_until_monotonic is not None and now_monotonic < self._hold_until_monotonic:
+                settle_label = f"{settle_seconds:.0f}" if settle_seconds.is_integer() else f"{settle_seconds:.1f}"
                 self._set_motor(
                     "WAITING",
                     "STOPPED",
-                    self._format_motor_message("Czekam 3 sekundy na ustabilizowanie", context),
+                    self._format_motor_message(f"Czekam {settle_label} s na ustabilizowanie", context),
                 )
                 continue
             self._hold_until_monotonic = None
