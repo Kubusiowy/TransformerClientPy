@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import threading
@@ -157,6 +158,7 @@ class MotorControlLoop:
         self.state = state
         self.config = config
         self.driver = CommandMotorDriver(config)
+        self.logger = logging.getLogger("transformer_client.motor")
         self.clear_active_callback = clear_active_callback
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -216,7 +218,8 @@ class MotorControlLoop:
             raw_delta = context.target_value - current_value
             raw_distance = abs(raw_delta)
             desired_direction = "FORWARD" if raw_delta > 0 else "REVERSE"
-            settle_seconds = max(self.config.motorSettleMs, 0) / 1000.0
+            base_settle_seconds = max(self.config.motorSettleMs, 0) / 1000.0
+            settle_seconds = self._settle_seconds_for_distance(raw_distance, base_settle_seconds)
             resume_threshold = threshold + max(self.config.motorProgressEpsilon * 4.0, 2.0)
             now_monotonic = time.monotonic()
             fresh_sample = self._consume_sample_update(context.last_update)
@@ -233,6 +236,14 @@ class MotorControlLoop:
                 self._step_credit = 0.0
                 self._step_credit_direction = None
                 self._runtime_direction_inverted = False
+                self.logger.info(
+                    "New active control meter=%s register=%s target=%.4f threshold=%.4f unit=%s",
+                    context.meter_id,
+                    context.register_id,
+                    context.target_value,
+                    threshold,
+                    context.unit or "",
+                )
 
             if raw_distance <= threshold:
                 self._last_distance = raw_distance
@@ -243,7 +254,7 @@ class MotorControlLoop:
                 if self._stable_since_monotonic is None:
                     self._stable_since_monotonic = now_monotonic
                 held_for = now_monotonic - self._stable_since_monotonic
-                if held_for < settle_seconds:
+                if held_for < base_settle_seconds:
                     self._set_motor(
                         "WAITING",
                         "STOPPED",
@@ -294,6 +305,16 @@ class MotorControlLoop:
                     self._step_credit = 0.0
                     self._step_credit_direction = None
                     self._next_action_monotonic = now_monotonic + settle_seconds
+                    self.logger.warning(
+                        "Step worsened error. meter=%s register=%s desired=%s live=%.4f target=%.4f delta=%.4f invert_now=%s",
+                        context.meter_id,
+                        context.register_id,
+                        desired_direction,
+                        current_value,
+                        context.target_value,
+                        raw_delta,
+                        self._runtime_direction_inverted,
+                    )
                     self._set_motor(
                         "HOLDING",
                         "STOPPED",
@@ -333,6 +354,20 @@ class MotorControlLoop:
                 self._step_credit_direction = desired_direction
                 self._step_credit = 0.0
             self._step_credit += step_fraction
+            self.logger.info(
+                "Decision meter=%s register=%s live=%.4f target=%.4f delta=%.4f distance=%.4f threshold=%.4f desired=%s credit=%.2f add=%.2f wait_s=%.1f",
+                context.meter_id,
+                context.register_id,
+                current_value,
+                context.target_value,
+                raw_delta,
+                raw_distance,
+                threshold,
+                desired_direction,
+                self._step_credit,
+                step_fraction,
+                settle_seconds,
+            )
 
             if self._step_credit < 1.0:
                 self._next_action_monotonic = now_monotonic + settle_seconds
@@ -349,6 +384,15 @@ class MotorControlLoop:
             self._step_credit -= 1.0
             self._last_burst_direction = desired_direction
             self._next_action_monotonic = now_monotonic + settle_seconds
+            self.logger.info(
+                "Executing step meter=%s register=%s direction=%s mapped=%s remaining_credit=%.2f next_wait_s=%.1f",
+                context.meter_id,
+                context.register_id,
+                desired_direction,
+                self._map_direction(desired_direction),
+                self._step_credit,
+                settle_seconds,
+            )
             self._set_motor(
                 "RUNNING",
                 self._map_direction(desired_direction),
@@ -388,6 +432,7 @@ class MotorControlLoop:
             self.driver.stop()
         except Exception:
             pass
+        self.logger.error("Safety stop: %s", message)
         self.clear_active_callback()
         self.state.set_motor_state("SAFETY_STOP", "STOPPED", message)
 
@@ -417,6 +462,16 @@ class MotorControlLoop:
             return 0.3
         return 0.1
 
+    @staticmethod
+    def _settle_seconds_for_distance(distance: float, base_seconds: float) -> float:
+        if distance > 50:
+            return min(base_seconds, 1.0)
+        if distance > 30:
+            return min(base_seconds, 2.0)
+        if distance > 10:
+            return min(base_seconds, 3.0)
+        return base_seconds
+
     def _consume_sample_update(self, last_update: datetime | None) -> bool:
         if last_update is None:
             return False
@@ -429,5 +484,13 @@ class MotorControlLoop:
         try:
             self.driver.set_direction(direction, burst_steps=burst_steps)
             self.state.set_motor_state(state_name, direction, message)
+            self.logger.info(
+                "Motor state=%s direction=%s burst_steps=%s message=%s",
+                state_name,
+                direction,
+                burst_steps,
+                message,
+            )
         except Exception as exc:
+            self.logger.exception("Motor command failed state=%s direction=%s burst_steps=%s", state_name, direction, burst_steps)
             self.state.set_motor_state("ERROR", "STOPPED", str(exc))

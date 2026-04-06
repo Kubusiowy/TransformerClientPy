@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 from dataclasses import replace
 from pathlib import Path
@@ -7,6 +8,7 @@ from pathlib import Path
 from transformer_client.backend import BackendClient, BackendError
 from transformer_client.config import load_client_config, save_client_config
 from transformer_client.control import MotorControlError, MotorControlLoop, RegisterControlStore
+from transformer_client.logging_utils import setup_logging
 from transformer_client.metrics_ws import MetricsConnectionSettings, MetricsPublisher, build_metrics_ws_url
 from transformer_client.models import AuthResponse, TransformerDto
 from transformer_client.polling import PollingSupervisor
@@ -16,6 +18,8 @@ from transformer_client.state import ApplicationState
 class LiveClientController:
     def __init__(self, workdir: Path) -> None:
         self.workdir = workdir
+        self.log_path = setup_logging(workdir)
+        self.logger = logging.getLogger("transformer_client.controller")
         self.config = load_client_config(workdir)
         self.backend = BackendClient(self.config.backendUrl)
         self.state = ApplicationState()
@@ -32,6 +36,7 @@ class LiveClientController:
         self._refresh_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._logged_in = False
+        self.logger.info("Controller started. log_file=%s backend=%s", self.log_path, self.config.backendUrl)
         self.motor_control.start()
         self.metrics_publisher.start()
 
@@ -44,6 +49,7 @@ class LiveClientController:
         self.backend.set_base_url(self.config.backendUrl)
         save_client_config(self.config, self.workdir)
         self.motor_control.update_config(self.config)
+        self.logger.info("Backend URL updated to %s", self.config.backendUrl)
 
     def login(self, email: str, password: str, remember_credentials: bool) -> AuthResponse:
         self.config.email = email.strip()
@@ -51,8 +57,10 @@ class LiveClientController:
         self.config.password = password if remember_credentials else ""
         self.set_backend_url(self.config.backendUrl)
 
+        self.logger.info("Login attempt email=%s remember_credentials=%s", email.strip(), remember_credentials)
         auth = self.backend.login(email.strip(), password)
         self._logged_in = True
+        self.logger.info("Login success role=%s user_id=%s", auth.role, auth.id)
         save_client_config(self.config, self.workdir)
         self.refresh_configuration()
         self._ensure_refresh_thread()
@@ -93,6 +101,14 @@ class LiveClientController:
                 self.control_store.active_key,
             )
             self.polling.reconcile(meters, registers_by_meter, self.config)
+            register_count = sum(len(items) for items in registers_by_meter.values())
+            self.logger.info(
+                "Configuration refreshed transformer=%s meters=%s registers=%s active_control=%s",
+                selected.id,
+                len(meters),
+                register_count,
+                self.control_store.active_key,
+            )
             return selected
 
     def set_register_control(
@@ -109,18 +125,29 @@ class LiveClientController:
             raise MotorControlError("Aktywny moze byc tylko jeden rejestr. Najpierw zatrzymaj obecny.")
         self.control_store.set_control(meter_id, register_id, target_value, threshold_value, activate)
         self.state.set_register_control(meter_id, register_id, target_value, threshold_value, activate)
+        self.logger.info(
+            "Register control updated meter=%s register=%s target=%s threshold=%s active=%s",
+            meter_id,
+            register_id,
+            target_value,
+            threshold_value,
+            activate,
+        )
 
     def clear_active_register_control(self) -> None:
         self.control_store.clear_active()
         self.state.clear_active_control()
+        self.logger.info("Active register control cleared")
 
     def shutdown(self) -> None:
+        self.logger.info("Controller shutdown requested")
         self._stop_event.set()
         if self._refresh_thread is not None:
             self._refresh_thread.join(timeout=1.0)
         self.polling.shutdown()
         self.motor_control.stop()
         self.metrics_publisher.stop()
+        self.logger.info("Controller shutdown complete")
 
     def _choose_transformer(self, transformers: list[TransformerDto]) -> TransformerDto:
         if self.config.transformerId:
@@ -147,6 +174,7 @@ class LiveClientController:
                 self.refresh_configuration()
                 self.state.set_backend_error(None)
             except Exception as exc:
+                self.logger.exception("Configuration refresh failed: %s", exc)
                 self.state.set_backend_error(str(exc))
             interval = max(self.config.configRefreshMs, 250) / 1000.0
 

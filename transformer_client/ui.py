@@ -27,7 +27,7 @@ class LiveClientApp:
         self.backend_error_var = tk.StringVar(value="")
         self.transformer_var = tk.StringVar(value="-")
         self.summary_var = tk.StringVar(value="Meters: 0 | Registers: 0")
-        self.motor_status_var = tk.StringVar(value="Motor: IDLE | STOPPED")
+        self.motor_status_var = tk.StringVar(value="Motor: bezczynny | stop")
         self.motor_message_var = tk.StringVar(value="Brak aktywnego rejestru.")
         self.metrics_status_var = tk.StringVar(value="Metrics WS: DISCONNECTED")
         self.selected_register_var = tk.StringVar(value="Brak zaznaczenia")
@@ -254,8 +254,8 @@ class LiveClientApp:
             f"Meters: {snapshot['meter_count']} | Registers: {snapshot['register_count']}"
         )
         self.backend_error_var.set(snapshot["backend_error"] or "")
-        self.motor_status_var.set(f"Motor: {snapshot['motor_state']} | {snapshot['motor_direction']}")
-        self.motor_message_var.set(snapshot["motor_message"])
+        self.motor_status_var.set(format_motor_status(snapshot["motor_state"], snapshot["motor_direction"]))
+        self.motor_message_var.set(format_motor_message(snapshot["motor_state"], snapshot["motor_message"]))
         metrics_state = snapshot["metrics_state"]
         metrics_error = snapshot["metrics_error"]
         self.metrics_status_var.set(
@@ -452,3 +452,39 @@ def parse_optional_float(value: str) -> float | None:
     if not stripped:
         return None
     return float(stripped)
+
+
+def format_motor_status(state_name: str, direction: str) -> str:
+    state_map = {
+        "IDLE": "bezczynny",
+        "WAITING": "czekanie",
+        "HOLDING": "wstrzymany",
+        "RUNNING": "korekta",
+        "TARGET_REACHED": "target osiagniety",
+        "SAFETY_STOP": "awaryjny stop",
+        "ERROR": "blad",
+    }
+    direction_map = {
+        "STOPPED": "stop",
+        "FORWARD": "kierunek +",
+        "REVERSE": "kierunek -",
+    }
+    state_label = state_map.get(state_name, state_name.lower())
+    direction_label = direction_map.get(direction, direction.lower())
+    return f"Motor: {state_label} | {direction_label}"
+
+
+def format_motor_message(state_name: str, message: str) -> str:
+    prefix_map = {
+        "IDLE": "Stan: brak aktywnego sterowania.",
+        "WAITING": "Stan: regulator czeka i tylko obserwuje pomiar.",
+        "HOLDING": "Stan: regulator chwilowo nic nie koryguje.",
+        "RUNNING": "Stan: wykonywana jest korekta w strone targetu.",
+        "TARGET_REACHED": "Stan: wartosc jest w dozwolonym zakresie threshold.",
+        "SAFETY_STOP": "Stan: zatrzymanie awaryjne.",
+        "ERROR": "Stan: blad sterowania.",
+    }
+    prefix = prefix_map.get(state_name, "")
+    if not prefix:
+        return message
+    return f"{prefix} {message}"
