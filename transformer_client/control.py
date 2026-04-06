@@ -274,8 +274,8 @@ class MotorControlLoop:
                 if filtered_distance <= reverse_threshold:
                     self._set_motor(
                         "HOLDING",
-                        self._map_direction(self._current_direction),
-                        self._format_motor_message("Blisko targetu, bez odwrocenia", context, filtered_value),
+                        "STOPPED",
+                        self._format_motor_message("Blisko targetu, zatrzymuje przed odwroceniem", context, filtered_value),
                     )
                     self._reverse_pending_count = 0
                     continue
@@ -287,7 +287,7 @@ class MotorControlLoop:
                 if self._reverse_pending_count < max(self.config.motorReverseSamples, 1):
                     self._set_motor(
                         "HOLDING",
-                        self._map_direction(self._current_direction),
+                        "STOPPED",
                         self._format_motor_message("Potwierdzam potrzebe zmiany kierunku", context, filtered_value),
                     )
                     continue
