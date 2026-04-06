@@ -29,5 +29,11 @@
   "motorReverseSamples": 2,
   "motorForwardCommand": "sh ./scripts/drv8825_forward.sh",
   "motorReverseCommand": "sh ./scripts/drv8825_reverse.sh",
-  "motorStopCommand": "sh ./scripts/drv8825_stop.sh"
+  "motorStopCommand": "sh ./scripts/drv8825_stop.sh",
+  "smsEnabled": false,
+  "smsApiKey": "JDJhJDEyJDVjeW5zeDZKWUJBWG40eDY3QmJYak9ERGlCL1ovZy5TelVnLmdhVHhheDRkUWJ1Z1QxSXY2",
+  "smsSender": "Energeon",
+  "smsBulkVariant": "PRO",
+  "smsPhoneNumbers": [],
+  "smsAlertCooldownMs": 300000
 }

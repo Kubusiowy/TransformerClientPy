@@ -35,6 +35,9 @@ class LiveClientApp:
         self.control_target_var = tk.StringVar(value="")
         self.control_threshold_var = tk.StringVar(value="")
         self.activate_control_var = tk.BooleanVar(value=False)
+        self.sms_enabled_var = tk.BooleanVar(value=self.controller.config.smsEnabled)
+        self.sms_numbers_var = tk.StringVar(value=", ".join(self.controller.config.smsPhoneNumbers))
+        self.sms_status_var = tk.StringVar(value="SMS: brak konfiguracji")
 
         self._tree: ttk.Treeview | None = None
         self._target_entry: ttk.Entry | None = None
@@ -100,7 +103,7 @@ class LiveClientApp:
         frame = ttk.Frame(self.root, padding=16)
         frame.pack(fill="both", expand=True)
         frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(5, weight=1)
+        frame.rowconfigure(6, weight=1)
         self._main_frame = frame
 
         top_bar = ttk.Frame(frame)
@@ -155,6 +158,44 @@ class LiveClientApp:
         ttk.Button(control_frame, text="Apply", command=self._apply_control).grid(row=2, column=2, sticky="e", padx=6)
         ttk.Button(control_frame, text="Stop control", command=self._clear_active_control).grid(row=2, column=3, sticky="w")
 
+        sms_frame = ttk.LabelFrame(control_frame, text="Powiadomienia SMS", padding=10)
+        sms_frame.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(12, 0))
+        sms_frame.columnconfigure(1, weight=1)
+        sms_frame.columnconfigure(3, weight=1)
+
+        ttk.Checkbutton(
+            sms_frame,
+            text="Wlacz alert SMS przy przekroczeniu targetu",
+            variable=self.sms_enabled_var,
+        ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 6))
+        ttk.Label(sms_frame, text="Numer telefonu").grid(row=1, column=0, sticky="w", pady=4)
+        ttk.Entry(sms_frame, textvariable=self.sms_numbers_var).grid(row=1, column=1, columnspan=3, sticky="ew", pady=4)
+        ttk.Label(
+            sms_frame,
+            text="API key i nadawca sa ustawione w configu aplikacji.",
+            foreground="#444",
+        ).grid(row=2, column=0, columnspan=4, sticky="w", pady=(2, 0))
+        ttk.Button(sms_frame, text="Zapisz SMS", command=self._save_sms_settings).grid(
+            row=3,
+            column=2,
+            sticky="e",
+            padx=6,
+            pady=(6, 0),
+        )
+        ttk.Button(sms_frame, text="Wyslij test SMS", command=self._send_test_sms_async).grid(
+            row=3,
+            column=3,
+            sticky="w",
+            pady=(6, 0),
+        )
+        ttk.Label(sms_frame, textvariable=self.sms_status_var, foreground="#444").grid(
+            row=4,
+            column=0,
+            columnspan=4,
+            sticky="w",
+            pady=(6, 0),
+        )
+
         columns = ("meter", "port", "status", "register", "value", "target", "threshold", "active", "unit", "updated", "address", "type")
         tree = ttk.Treeview(frame, columns=columns, show="headings")
         headings = {
@@ -192,8 +233,8 @@ class LiveClientApp:
         scrollbar = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
         tree.configure(yscrollcommand=scrollbar.set)
         tree.bind("<<TreeviewSelect>>", self._on_tree_select)
-        tree.grid(row=5, column=0, sticky="nsew")
-        scrollbar.grid(row=5, column=1, sticky="ns")
+        tree.grid(row=6, column=0, sticky="nsew")
+        scrollbar.grid(row=6, column=1, sticky="ns")
         self._tree = tree
 
         self._schedule_ui_refresh()
@@ -376,6 +417,34 @@ class LiveClientApp:
         self.activate_control_var.set(False)
         self._refresh_ui()
 
+    def _save_sms_settings(self) -> bool:
+        try:
+            self.controller.update_sms_settings(
+                self.sms_enabled_var.get(),
+                parse_phone_numbers(self.sms_numbers_var.get()),
+            )
+        except Exception as exc:
+            self.sms_status_var.set(f"SMS: blad zapisu - {exc}")
+            messagebox.showerror("SMS", str(exc))
+            return False
+        self.sms_status_var.set("SMS: konfiguracja zapisana")
+        return True
+
+    def _send_test_sms_async(self) -> None:
+        if not self._save_sms_settings():
+            return
+        self.sms_status_var.set("SMS: wysylanie testu...")
+
+        def worker() -> None:
+            try:
+                result = self.controller.send_test_sms()
+            except Exception as exc:
+                self.root.after(0, lambda: self.sms_status_var.set(f"SMS: blad - {exc}"))
+                return
+            self.root.after(0, lambda: self.sms_status_var.set(f"SMS: {result}"))
+
+        threading.Thread(target=worker, daemon=True, name="sms-test").start()
+
     def _require_selected_row(self) -> UiRow | None:
         if self._selected_key is None:
             messagebox.showerror("Sterowanie", "Najpierw wybierz rejestr z tabeli.")
@@ -452,6 +521,10 @@ def parse_optional_float(value: str) -> float | None:
     if not stripped:
         return None
     return float(stripped)
+
+
+def parse_phone_numbers(value: str) -> list[str]:
+    return [item.strip() for item in value.replace("\n", ",").split(",") if item.strip()]
 
 
 def format_motor_status(state_name: str, direction: str) -> str:

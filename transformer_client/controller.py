@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -12,7 +13,96 @@ from transformer_client.logging_utils import setup_logging
 from transformer_client.metrics_ws import MetricsConnectionSettings, MetricsPublisher, build_metrics_ws_url
 from transformer_client.models import AuthResponse, TransformerDto
 from transformer_client.polling import PollingSupervisor
+from transformer_client.sms import JustSendSmsClient, SmsSendError
 from transformer_client.state import ApplicationState
+
+
+class TargetExceededSmsMonitor:
+    def __init__(
+        self,
+        state: ApplicationState,
+        get_config_copy,
+        send_callback,
+    ) -> None:
+        self.state = state
+        self.get_config_copy = get_config_copy
+        self.send_callback = send_callback
+        self.logger = logging.getLogger("transformer_client.sms_monitor")
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._last_key: tuple[int, int] | None = None
+        self._was_above_limit = False
+        self._last_sent_at_by_key: dict[tuple[int, int], float] = {}
+
+    def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True, name="sms-monitor")
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+
+    def _run(self) -> None:
+        while not self._stop_event.wait(0.5):
+            config = self.get_config_copy()
+            if not config.smsEnabled or not config.smsApiKey.strip() or not config.smsPhoneNumbers:
+                self._last_key = None
+                self._was_above_limit = False
+                continue
+
+            context = self.state.get_active_control_context()
+            snapshot = self.state.snapshot()
+            transformer = snapshot["selected_transformer"]
+            if context is None or context.current_value is None or context.target_value is None:
+                self._last_key = None
+                self._was_above_limit = False
+                continue
+
+            key = (context.meter_id, context.register_id)
+            if self._last_key != key:
+                self._last_key = key
+                self._was_above_limit = False
+
+            threshold = abs(context.threshold_value) if context.threshold_value is not None else 0.0
+            delta = context.current_value - context.target_value
+            if delta > 0:
+                if not self._was_above_limit:
+                    now = time.monotonic()
+                    cooldown_seconds = max(config.smsAlertCooldownMs, 0) / 1000.0
+                    last_sent_at = self._last_sent_at_by_key.get(key, 0.0)
+                    if now - last_sent_at >= cooldown_seconds:
+                        transformer_name = transformer.name if transformer is not None else "-"
+                        unit = context.unit or ""
+                        unit_suffix = f" {unit}" if unit else ""
+                        message = (
+                            f"Przekroczenie targetu. Transformer: {transformer_name}. "
+                            f"Rejestr: {context.meter_name}/{context.register_name}. "
+                            f"Pomiar: {context.current_value:.2f}{unit_suffix}. "
+                            f"Target: {context.target_value:.2f}{unit_suffix}. "
+                            f"Threshold: {threshold:.2f}{unit_suffix}. "
+                            f"Przekroczenie ponad target: {delta:.2f}{unit_suffix}."
+                        )
+                        try:
+                            self.send_callback(message)
+                            self._last_sent_at_by_key[key] = now
+                            self.logger.info(
+                                "Target exceeded SMS sent meter=%s register=%s live=%.4f target=%.4f threshold=%.4f delta=%.4f",
+                                context.meter_id,
+                                context.register_id,
+                                context.current_value,
+                                context.target_value,
+                                threshold,
+                                delta,
+                            )
+                        except Exception as exc:
+                            self.logger.error("Target exceeded SMS failed: %s", exc)
+                self._was_above_limit = True
+            else:
+                self._was_above_limit = False
 
 
 class LiveClientController:
@@ -26,6 +116,12 @@ class LiveClientController:
         self.control_store = RegisterControlStore(workdir)
         self.polling = PollingSupervisor(self.state)
         self.motor_control = MotorControlLoop(self.state, self.config, self.clear_active_register_control)
+        self.sms_client = JustSendSmsClient()
+        self.sms_monitor = TargetExceededSmsMonitor(
+            self.state,
+            self._get_config_copy,
+            self.send_sms_message,
+        )
         self.metrics_publisher = MetricsPublisher(
             self.state,
             self._get_config_copy,
@@ -38,6 +134,7 @@ class LiveClientController:
         self._logged_in = False
         self.logger.info("Controller started. log_file=%s backend=%s", self.log_path, self.config.backendUrl)
         self.motor_control.start()
+        self.sms_monitor.start()
         self.metrics_publisher.start()
 
     @property
@@ -139,6 +236,39 @@ class LiveClientController:
         self.state.clear_active_control()
         self.logger.info("Active register control cleared")
 
+    def update_sms_settings(
+        self,
+        enabled: bool,
+        phone_numbers: list[str],
+    ) -> None:
+        self.config.smsEnabled = enabled
+        self.config.smsPhoneNumbers = [item for item in phone_numbers if item]
+        save_client_config(self.config, self.workdir)
+        self.logger.info(
+            "SMS settings updated enabled=%s phones=%s sender=%s variant=%s",
+            enabled,
+            len(self.config.smsPhoneNumbers),
+            self.config.smsSender,
+            self.config.smsBulkVariant,
+        )
+
+    def send_test_sms(self) -> str:
+        message = (
+            f"Test SMS z Transformer Client. Transformer={self.config.transformerId or '-'}."
+        )
+        result = self.send_sms_message(message)
+        self.logger.info("Test SMS requested result=%s", result)
+        return result
+
+    def send_sms_message(self, message: str) -> str:
+        return self.sms_client.send_message(
+            self.config.smsApiKey,
+            self.config.smsSender,
+            list(self.config.smsPhoneNumbers),
+            message,
+            self.config.smsBulkVariant,
+        )
+
     def shutdown(self) -> None:
         self.logger.info("Controller shutdown requested")
         self._stop_event.set()
@@ -146,6 +276,7 @@ class LiveClientController:
             self._refresh_thread.join(timeout=1.0)
         self.polling.shutdown()
         self.motor_control.stop()
+        self.sms_monitor.stop()
         self.metrics_publisher.stop()
         self.logger.info("Controller shutdown complete")
 

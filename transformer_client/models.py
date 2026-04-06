@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -37,6 +37,12 @@ DEFAULT_CLIENT_CONFIG: dict[str, Any] = {
     "motorForwardCommand": "",
     "motorReverseCommand": "",
     "motorStopCommand": "",
+    "smsEnabled": False,
+    "smsApiKey": "JDJhJDEyJDVjeW5zeDZKWUJBWG40eDY3QmJYak9ERGlCL1ovZy5TelVnLmdhVHhheDRkUWJ1Z1QxSXY2",
+    "smsSender": "Energeon",
+    "smsBulkVariant": "PRO",
+    "smsPhoneNumbers": [],
+    "smsAlertCooldownMs": 300000,
 }
 
 
@@ -73,6 +79,12 @@ class ClientConfig:
     motorForwardCommand: str = DEFAULT_CLIENT_CONFIG["motorForwardCommand"]
     motorReverseCommand: str = DEFAULT_CLIENT_CONFIG["motorReverseCommand"]
     motorStopCommand: str = DEFAULT_CLIENT_CONFIG["motorStopCommand"]
+    smsEnabled: bool = DEFAULT_CLIENT_CONFIG["smsEnabled"]
+    smsApiKey: str = DEFAULT_CLIENT_CONFIG["smsApiKey"]
+    smsSender: str = DEFAULT_CLIENT_CONFIG["smsSender"]
+    smsBulkVariant: str = DEFAULT_CLIENT_CONFIG["smsBulkVariant"]
+    smsPhoneNumbers: list[str] = field(default_factory=lambda: list(DEFAULT_CLIENT_CONFIG["smsPhoneNumbers"]))
+    smsAlertCooldownMs: int = DEFAULT_CLIENT_CONFIG["smsAlertCooldownMs"]
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "ClientConfig":
@@ -109,6 +121,12 @@ class ClientConfig:
             motorForwardCommand=str(merged["motorForwardCommand"]),
             motorReverseCommand=str(merged["motorReverseCommand"]),
             motorStopCommand=str(merged["motorStopCommand"]),
+            smsEnabled=bool(merged["smsEnabled"]),
+            smsApiKey=str(merged["smsApiKey"]),
+            smsSender=str(merged["smsSender"]),
+            smsBulkVariant=str(merged["smsBulkVariant"]),
+            smsPhoneNumbers=[str(item).strip() for item in merged.get("smsPhoneNumbers", []) if str(item).strip()],
+            smsAlertCooldownMs=int(merged["smsAlertCooldownMs"]),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -144,6 +162,12 @@ class ClientConfig:
             "motorForwardCommand": self.motorForwardCommand,
             "motorReverseCommand": self.motorReverseCommand,
             "motorStopCommand": self.motorStopCommand,
+            "smsEnabled": self.smsEnabled,
+            "smsApiKey": self.smsApiKey,
+            "smsSender": self.smsSender,
+            "smsBulkVariant": self.smsBulkVariant,
+            "smsPhoneNumbers": list(self.smsPhoneNumbers),
+            "smsAlertCooldownMs": self.smsAlertCooldownMs,
         }
 
 
