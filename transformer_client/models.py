@@ -23,7 +23,7 @@ DEFAULT_CLIENT_CONFIG: dict[str, Any] = {
     "motorProgressEpsilon": 0.2,
     "metricsPublishMs": 500,
     "motorBurstSteps": 1,
-    "motorStepDelaySec": 0.015,
+    "motorStepDelaySec": 0.02,
     "motorSettleMs": 1200,
     "motorDirectionInverted": True,
     "motorMicrostepMode": "FULL",
@@ -31,6 +31,9 @@ DEFAULT_CLIENT_CONFIG: dict[str, Any] = {
     "motorM1Pin": None,
     "motorM2Pin": None,
     "motorEnableDelaySec": 0.002,
+    "motorAverageWindow": 5,
+    "motorReverseThresholdMultiplier": 2.0,
+    "motorReverseSamples": 3,
     "motorForwardCommand": "",
     "motorReverseCommand": "",
     "motorStopCommand": "",
@@ -64,6 +67,9 @@ class ClientConfig:
     motorM1Pin: int | None = DEFAULT_CLIENT_CONFIG["motorM1Pin"]
     motorM2Pin: int | None = DEFAULT_CLIENT_CONFIG["motorM2Pin"]
     motorEnableDelaySec: float = DEFAULT_CLIENT_CONFIG["motorEnableDelaySec"]
+    motorAverageWindow: int = DEFAULT_CLIENT_CONFIG["motorAverageWindow"]
+    motorReverseThresholdMultiplier: float = DEFAULT_CLIENT_CONFIG["motorReverseThresholdMultiplier"]
+    motorReverseSamples: int = DEFAULT_CLIENT_CONFIG["motorReverseSamples"]
     motorForwardCommand: str = DEFAULT_CLIENT_CONFIG["motorForwardCommand"]
     motorReverseCommand: str = DEFAULT_CLIENT_CONFIG["motorReverseCommand"]
     motorStopCommand: str = DEFAULT_CLIENT_CONFIG["motorStopCommand"]
@@ -97,6 +103,9 @@ class ClientConfig:
             motorM1Pin=int(merged["motorM1Pin"]) if merged.get("motorM1Pin") is not None else None,
             motorM2Pin=int(merged["motorM2Pin"]) if merged.get("motorM2Pin") is not None else None,
             motorEnableDelaySec=float(merged["motorEnableDelaySec"]),
+            motorAverageWindow=int(merged["motorAverageWindow"]),
+            motorReverseThresholdMultiplier=float(merged["motorReverseThresholdMultiplier"]),
+            motorReverseSamples=int(merged["motorReverseSamples"]),
             motorForwardCommand=str(merged["motorForwardCommand"]),
             motorReverseCommand=str(merged["motorReverseCommand"]),
             motorStopCommand=str(merged["motorStopCommand"]),
@@ -129,6 +138,9 @@ class ClientConfig:
             "motorM1Pin": self.motorM1Pin,
             "motorM2Pin": self.motorM2Pin,
             "motorEnableDelaySec": self.motorEnableDelaySec,
+            "motorAverageWindow": self.motorAverageWindow,
+            "motorReverseThresholdMultiplier": self.motorReverseThresholdMultiplier,
+            "motorReverseSamples": self.motorReverseSamples,
             "motorForwardCommand": self.motorForwardCommand,
             "motorReverseCommand": self.motorReverseCommand,
             "motorStopCommand": self.motorStopCommand,

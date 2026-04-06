@@ -5,6 +5,7 @@ import os
 import subprocess
 import threading
 import time
+from collections import deque
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -102,7 +103,7 @@ class CommandMotorDriver:
         self._last_direction = "STOPPED"
 
     def set_direction(self, direction: str) -> None:
-        if direction == "STOPPED" and direction == self._last_direction:
+        if direction == self._last_direction:
             return
         command = self._command_for(direction)
         if not command:
@@ -163,9 +164,10 @@ class MotorControlLoop:
         self._last_key: tuple[int, int] | None = None
         self._last_distance: float | None = None
         self._last_progress_monotonic: float | None = None
-        self._awaiting_measurement = False
-        self._last_command_seen_update: datetime | None = None
-        self._last_command_monotonic: float | None = None
+        self._value_window: deque[float] = deque()
+        self._last_seen_update: datetime | None = None
+        self._current_direction: str = "STOPPED"
+        self._reverse_pending_count = 0
 
     def update_config(self, config: ClientConfig) -> None:
         self.config = config
@@ -214,35 +216,29 @@ class MotorControlLoop:
                 self._last_key = key
                 self._last_distance = distance
                 self._last_progress_monotonic = time.monotonic()
-                self._awaiting_measurement = False
-                self._last_command_seen_update = context.last_update
-                self._last_command_monotonic = None
+                self._value_window.clear()
+                self._last_seen_update = None
+                self._current_direction = "STOPPED"
+                self._reverse_pending_count = 0
 
-            if abs(delta) <= threshold:
-                self._reset_progress_tracking()
+            self._append_measurement(context)
+            filtered_value = self._filtered_value(context.current_value)
+            filtered_delta = context.target_value - filtered_value
+            filtered_distance = abs(filtered_delta)
+
+            if filtered_distance <= threshold:
+                self._current_direction = "STOPPED"
+                self._reverse_pending_count = 0
+                self._reset_progress_tracking(keep_filter=True)
                 self._set_motor(
                     "TARGET_REACHED",
                     "STOPPED",
-                    self._format_motor_message("Osiagnieto target", context),
+                    self._format_motor_message("Osiagnieto target", context, filtered_value),
                 )
                 continue
 
-            if self._awaiting_measurement:
-                if self._has_fresh_measurement(context.last_update):
-                    self._awaiting_measurement = False
-                    self._last_command_seen_update = context.last_update
-                elif not self._settle_timeout_elapsed():
-                    self._set_motor(
-                        "WAITING_MEASUREMENT",
-                        "STOPPED",
-                        self._format_motor_message("Czekam na nowy pomiar po ruchu", context),
-                    )
-                    continue
-                else:
-                    self._awaiting_measurement = False
-
-            if self._has_progress(distance):
-                self._last_distance = distance
+            if self._has_progress(filtered_distance):
+                self._last_distance = filtered_distance
                 self._last_progress_monotonic = time.monotonic()
 
             if self._measurement_stale(context.last_update) or self._progress_timeout_exceeded():
@@ -250,21 +246,58 @@ class MotorControlLoop:
                     self._format_motor_message(
                         "Safety stop: brak postepu albo brak swiezego pomiaru",
                         context,
+                        filtered_value,
                     )
                 )
                 continue
 
-            if delta > 0:
-                self._issue_direction(
+            desired_direction = "FORWARD" if filtered_delta > 0 else "REVERSE"
+            if self._current_direction == "STOPPED":
+                self._current_direction = desired_direction
+                self._reverse_pending_count = 0
+                self._set_motor(
                     "RUNNING",
-                    "FORWARD",
-                    self._format_motor_message("Korekta do gory", context),
+                    self._map_direction(self._current_direction),
+                    self._format_motor_message("Start korekty", context, filtered_value),
+                )
+                continue
+
+            if desired_direction == self._current_direction:
+                self._reverse_pending_count = 0
+                self._set_motor(
+                    "RUNNING",
+                    self._map_direction(self._current_direction),
+                    self._format_motor_message("Plynna korekta", context, filtered_value),
                 )
             else:
-                self._issue_direction(
+                reverse_threshold = threshold * max(self.config.motorReverseThresholdMultiplier, 1.0)
+                if filtered_distance <= reverse_threshold:
+                    self._set_motor(
+                        "HOLDING",
+                        self._map_direction(self._current_direction),
+                        self._format_motor_message("Blisko targetu, bez odwrocenia", context, filtered_value),
+                    )
+                    self._reverse_pending_count = 0
+                    continue
+
+                if self._has_fresh_measurement(context.last_update):
+                    self._reverse_pending_count += 1
+                    self._last_seen_update = context.last_update
+
+                if self._reverse_pending_count < max(self.config.motorReverseSamples, 1):
+                    self._set_motor(
+                        "HOLDING",
+                        self._map_direction(self._current_direction),
+                        self._format_motor_message("Potwierdzam potrzebe zmiany kierunku", context, filtered_value),
+                    )
+                    continue
+
+                self._current_direction = desired_direction
+                self._reverse_pending_count = 0
+                self._set_motor(
                     "RUNNING",
-                    "REVERSE",
-                    self._format_motor_message("Korekta w dol", context),
+                    self._map_direction(self._current_direction),
+                    self._format_motor_message("Zmiana kierunku po potwierdzeniu", context, filtered_value),
                 )
 
     def _has_progress(self, distance: float) -> bool:
@@ -285,13 +318,15 @@ class MotorControlLoop:
         timeout_seconds = max(self.config.motorNoProgressTimeoutMs, 250) / 1000.0
         return age_seconds >= timeout_seconds
 
-    def _reset_progress_tracking(self) -> None:
-        self._last_key = None
+    def _reset_progress_tracking(self, keep_filter: bool = False) -> None:
+        self._last_key = None if not keep_filter else self._last_key
         self._last_distance = None
         self._last_progress_monotonic = None
-        self._awaiting_measurement = False
-        self._last_command_seen_update = None
-        self._last_command_monotonic = None
+        self._current_direction = "STOPPED"
+        self._reverse_pending_count = 0
+        if not keep_filter:
+            self._value_window.clear()
+            self._last_seen_update = None
 
     def _safety_stop(self, message: str) -> None:
         self._reset_progress_tracking()
@@ -303,20 +338,17 @@ class MotorControlLoop:
         self.state.set_motor_state("SAFETY_STOP", "STOPPED", message)
 
     @staticmethod
-    def _format_motor_message(prefix: str, context) -> str:
+    def _format_motor_message(prefix: str, context, filtered_value: float | None = None) -> str:
         unit = context.unit or ""
         unit_suffix = f" {unit}" if unit else ""
+        filtered_part = ""
+        if filtered_value is not None:
+            filtered_part = f" | avg={filtered_value:.4f}{unit_suffix}"
         return (
             f"{prefix}: {context.meter_name} / {context.register_name} | "
             f"live={context.current_value:.4f}{unit_suffix} | "
-            f"target={context.target_value:.4f}{unit_suffix}"
+            f"target={context.target_value:.4f}{unit_suffix}{filtered_part}"
         )
-
-    def _issue_direction(self, state_name: str, logical_direction: str, message: str) -> None:
-        actual_direction = self._map_direction(logical_direction)
-        self._set_motor(state_name, actual_direction, message)
-        self._awaiting_measurement = True
-        self._last_command_monotonic = time.monotonic()
 
     def _map_direction(self, logical_direction: str) -> str:
         if not self.config.motorDirectionInverted:
@@ -326,14 +358,25 @@ class MotorControlLoop:
     def _has_fresh_measurement(self, last_update: datetime | None) -> bool:
         if last_update is None:
             return False
-        if self._last_command_seen_update is None:
+        if self._last_seen_update is None:
             return True
-        return last_update > self._last_command_seen_update
+        return last_update > self._last_seen_update
 
-    def _settle_timeout_elapsed(self) -> bool:
-        if self._last_command_monotonic is None:
-            return True
-        return (time.monotonic() - self._last_command_monotonic) >= (max(self.config.motorSettleMs, 100) / 1000.0)
+    def _append_measurement(self, context) -> None:
+        if context.current_value is None:
+            return
+        if not self._has_fresh_measurement(context.last_update):
+            return
+        window_size = max(self.config.motorAverageWindow, 1)
+        self._value_window.append(context.current_value)
+        while len(self._value_window) > window_size:
+            self._value_window.popleft()
+        self._last_seen_update = context.last_update
+
+    def _filtered_value(self, fallback_value: float) -> float:
+        if not self._value_window:
+            return fallback_value
+        return sum(self._value_window) / len(self._value_window)
 
     def _set_motor(self, state_name: str, direction: str, message: str) -> None:
         try:

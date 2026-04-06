@@ -3,8 +3,12 @@
 EN_PIN=24
 STEP_PIN=23
 DIR_PIN=22
-STEP_DELAY_SEC=${MOTOR_STEP_DELAY_SEC:-0.008}
-BURST_STEPS=${MOTOR_BURST_STEPS:-6}
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+PID_FILE="$SCRIPT_DIR/.drv8825_step.pid"
+LOG_FILE="$SCRIPT_DIR/.drv8825_step.log"
+
+STEP_DELAY_SEC=${MOTOR_STEP_DELAY_SEC:-0.02}
+BURST_STEPS=${MOTOR_BURST_STEPS:-1}
 ENABLE_DELAY_SEC=${MOTOR_ENABLE_DELAY_SEC:-0.002}
 MICROSTEP_MODE=${MOTOR_MICROSTEP_MODE:-FULL}
 M0_PIN=${MOTOR_M0_PIN:-}
@@ -65,6 +69,17 @@ run_burst() {
     count=$((count + 1))
   done
   disable_driver
+}
+
+stop_worker() {
+  if [ -f "$PID_FILE" ]; then
+    pid=$(cat "$PID_FILE")
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+    fi
+    rm -f "$PID_FILE"
+  fi
 }
 
 set_pin_level() {

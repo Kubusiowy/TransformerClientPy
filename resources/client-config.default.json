@@ -16,7 +16,7 @@
   "motorProgressEpsilon": 0.2,
   "metricsPublishMs": 500,
   "motorBurstSteps": 1,
-  "motorStepDelaySec": 0.015,
+  "motorStepDelaySec": 0.02,
   "motorSettleMs": 1200,
   "motorDirectionInverted": true,
   "motorMicrostepMode": "FULL",
@@ -24,6 +24,9 @@
   "motorM1Pin": null,
   "motorM2Pin": null,
   "motorEnableDelaySec": 0.002,
+  "motorAverageWindow": 5,
+  "motorReverseThresholdMultiplier": 2.0,
+  "motorReverseSamples": 3,
   "motorForwardCommand": "sh ./scripts/drv8825_forward.sh",
   "motorReverseCommand": "sh ./scripts/drv8825_reverse.sh",
   "motorStopCommand": "sh ./scripts/drv8825_stop.sh"
