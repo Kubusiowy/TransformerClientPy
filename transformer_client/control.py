@@ -102,7 +102,12 @@ class CommandMotorDriver:
         self.stop_command = config.motorStopCommand.strip()
         self._last_direction = "STOPPED"
 
-    def set_direction(self, direction: str, burst_steps: int | None = None) -> None:
+    def set_direction(
+        self,
+        direction: str,
+        burst_steps: int | None = None,
+        step_delay_sec: float | None = None,
+    ) -> None:
         if direction == "STOPPED" and direction == self._last_direction:
             return
         command = self._command_for(direction)
@@ -124,7 +129,7 @@ class CommandMotorDriver:
             env={
                 **os.environ,
                 "MOTOR_BURST_STEPS": str(burst_steps if burst_steps is not None else self.config.motorBurstSteps),
-                "MOTOR_STEP_DELAY_SEC": str(self.config.motorStepDelaySec),
+                "MOTOR_STEP_DELAY_SEC": str(step_delay_sec if step_delay_sec is not None else self.config.motorStepDelaySec),
                 "MOTOR_ENABLE_DELAY_SEC": str(self.config.motorEnableDelaySec),
                 "MOTOR_MICROSTEP_MODE": str(self.config.motorMicrostepMode),
                 "MOTOR_M0_PIN": "" if self.config.motorM0Pin is None else str(self.config.motorM0Pin),
@@ -168,10 +173,11 @@ class MotorControlLoop:
         self._last_sample_update: datetime | None = None
         self._next_action_monotonic: float | None = None
         self._stable_since_monotonic: float | None = None
-        self._last_burst_direction: str | None = None
-        self._outside_band_samples = 0
-        self._step_credit = 0.0
-        self._step_credit_direction: str | None = None
+        self._prev_error: float | None = None
+        self._integral_error = 0.0
+        self._last_error_monotonic: float | None = None
+        self._overshoot_count = 0
+        self._last_error_sign = 0
         self._runtime_direction_inverted = False
 
     def update_config(self, config: ClientConfig) -> None:
@@ -215,12 +221,11 @@ class MotorControlLoop:
             key = (context.meter_id, context.register_id)
             threshold = abs(context.threshold_value) if context.threshold_value is not None else 0.0
             current_value = context.current_value
-            raw_delta = context.target_value - current_value
-            raw_distance = abs(raw_delta)
-            desired_direction = "FORWARD" if raw_delta > 0 else "REVERSE"
+            error = context.target_value - current_value
+            error_sign = self._error_sign(error)
+            raw_distance = abs(error)
             base_settle_seconds = max(self.config.motorSettleMs, 0) / 1000.0
-            settle_seconds = self._settle_seconds_for_distance(raw_distance, base_settle_seconds)
-            resume_threshold = threshold + max(self.config.motorProgressEpsilon * 4.0, 2.0)
+            settle_seconds = self._pid_settle_seconds(raw_distance, base_settle_seconds)
             now_monotonic = time.monotonic()
             fresh_sample = self._consume_sample_update(context.last_update)
 
@@ -231,26 +236,38 @@ class MotorControlLoop:
                 self._last_sample_update = context.last_update
                 self._next_action_monotonic = None
                 self._stable_since_monotonic = None
-                self._last_burst_direction = None
-                self._outside_band_samples = 0
-                self._step_credit = 0.0
-                self._step_credit_direction = None
+                self._prev_error = None
+                self._integral_error = 0.0
+                self._last_error_monotonic = None
+                self._overshoot_count = 0
+                self._last_error_sign = 0
                 self._runtime_direction_inverted = False
                 self.logger.info(
-                    "New active control meter=%s register=%s target=%.4f threshold=%.4f unit=%s",
+                    "PID init meter=%s register=%s target=%.4f threshold=%.4f live=%.4f unit=%s",
                     context.meter_id,
                     context.register_id,
                     context.target_value,
                     threshold,
+                    current_value,
                     context.unit or "",
                 )
+
+            if self._measurement_stale(context.last_update):
+                self._safety_stop(
+                    self._format_motor_message(
+                        "Safety stop: brak swiezego pomiaru",
+                        context,
+                    )
+                )
+                continue
 
             if raw_distance <= threshold:
                 self._last_distance = raw_distance
                 self._last_progress_monotonic = time.monotonic()
-                self._outside_band_samples = 0
-                self._step_credit = 0.0
-                self._step_credit_direction = None
+                self._integral_error *= 0.5
+                self._prev_error = error
+                self._last_error_monotonic = now_monotonic
+                self._last_error_sign = error_sign
                 if self._stable_since_monotonic is None:
                     self._stable_since_monotonic = now_monotonic
                 held_for = now_monotonic - self._stable_since_monotonic
@@ -268,75 +285,14 @@ class MotorControlLoop:
                     )
                 continue
 
-            if self._stable_since_monotonic is not None and raw_distance <= resume_threshold:
-                self._outside_band_samples = 0
-                self._set_motor(
-                    "HOLDING",
-                    "STOPPED",
-                    self._format_motor_message("Lekko poza targetem, trzymam bez korekty", context),
-                )
-                continue
-
-            if self._stable_since_monotonic is not None:
-                if fresh_sample:
-                    self._outside_band_samples += 1
-                if self._outside_band_samples < 2:
-                    self._set_motor(
-                        "HOLDING",
-                        "STOPPED",
-                        self._format_motor_message("Czekam na potwierdzenie wyjscia poza zakres", context),
-                    )
-                    continue
-
             self._stable_since_monotonic = None
-            self._outside_band_samples = 0
-
-            if fresh_sample:
-                if self._has_progress(raw_distance):
-                    self._last_distance = raw_distance
-                    self._last_progress_monotonic = time.monotonic()
-                elif (
-                    self._last_distance is not None
-                    and self._last_burst_direction == desired_direction
-                    and (raw_distance - self._last_distance) >= self.config.motorProgressEpsilon
-                ):
-                    self._runtime_direction_inverted = not self._runtime_direction_inverted
-                    self._last_burst_direction = None
-                    self._step_credit = 0.0
-                    self._step_credit_direction = None
-                    self._next_action_monotonic = now_monotonic + settle_seconds
-                    self.logger.warning(
-                        "Step worsened error. meter=%s register=%s desired=%s live=%.4f target=%.4f delta=%.4f invert_now=%s",
-                        context.meter_id,
-                        context.register_id,
-                        desired_direction,
-                        current_value,
-                        context.target_value,
-                        raw_delta,
-                        self._runtime_direction_inverted,
-                    )
-                    self._set_motor(
-                        "HOLDING",
-                        "STOPPED",
-                        self._format_motor_message("Ostatni maly krok pogorszyl blad, odwrocono kierunek", context),
-                    )
-                    continue
-
-            if self._measurement_stale(context.last_update):
-                self._safety_stop(
-                    self._format_motor_message(
-                        "Safety stop: brak swiezego pomiaru",
-                        context,
-                    )
-                )
-                continue
 
             if self._next_action_monotonic is not None and now_monotonic < self._next_action_monotonic:
                 settle_label = f"{settle_seconds:.0f}" if settle_seconds.is_integer() else f"{settle_seconds:.1f}"
                 self._set_motor(
                     "WAITING",
                     "STOPPED",
-                    self._format_motor_message(f"Czekam {settle_label} s i obserwuje pomiar", context),
+                    self._format_motor_message(f"Czekam {settle_label} s po korekcie PID", context),
                 )
                 continue
             self._next_action_monotonic = None
@@ -349,56 +305,74 @@ class MotorControlLoop:
                 )
                 continue
 
-            step_fraction = self._step_fraction_for_distance(raw_distance)
-            if self._step_credit_direction != desired_direction:
-                self._step_credit_direction = desired_direction
-                self._step_credit = 0.0
-            self._step_credit += step_fraction
+            dt = interval
+            if self._last_error_monotonic is not None:
+                dt = max(now_monotonic - self._last_error_monotonic, 0.05)
+
+            if fresh_sample and self._prev_error is not None and error_sign != 0 and self._last_error_sign != 0 and error_sign != self._last_error_sign:
+                self._overshoot_count = min(self._overshoot_count + 1, 6)
+                self._integral_error *= 0.5
+                self.logger.warning(
+                    "PID overshoot meter=%s register=%s prev_error=%.4f error=%.4f overshoot_count=%s",
+                    context.meter_id,
+                    context.register_id,
+                    self._prev_error,
+                    error,
+                    self._overshoot_count,
+                )
+            elif self._prev_error is not None and raw_distance < abs(self._prev_error):
+                self._overshoot_count = max(self._overshoot_count - 1, 0)
+
+            self._integral_error += error * dt
+            self._integral_error = max(min(self._integral_error, 500.0), -500.0)
+            derivative = 0.0
+            if self._prev_error is not None:
+                derivative = (error - self._prev_error) / dt
+
+            pid_output = (0.12 * error) + (0.01 * self._integral_error) + (0.04 * derivative)
+            if abs(pid_output) < 0.001:
+                pid_output = error
+            desired_direction = "FORWARD" if pid_output > 0 else "REVERSE"
+            burst_steps = self._pid_burst_steps(raw_distance, self._overshoot_count)
+            step_delay_sec = self._pid_step_delay(raw_distance, self._overshoot_count)
             self.logger.info(
-                "Decision meter=%s register=%s live=%.4f target=%.4f delta=%.4f distance=%.4f threshold=%.4f desired=%s credit=%.2f add=%.2f wait_s=%.1f",
+                "PID decision meter=%s register=%s live=%.4f target=%.4f error=%.4f distance=%.4f threshold=%.4f integral=%.4f derivative=%.4f pid=%.4f overshoot_count=%s burst_steps=%s step_delay=%.4f wait_s=%.1f",
                 context.meter_id,
                 context.register_id,
                 current_value,
                 context.target_value,
-                raw_delta,
+                error,
                 raw_distance,
                 threshold,
-                desired_direction,
-                self._step_credit,
-                step_fraction,
+                self._integral_error,
+                derivative,
+                pid_output,
+                self._overshoot_count,
+                burst_steps,
+                step_delay_sec,
                 settle_seconds,
             )
-
-            if self._step_credit < 1.0:
-                self._next_action_monotonic = now_monotonic + settle_seconds
-                self._set_motor(
-                    "HOLDING",
-                    "STOPPED",
-                    self._format_motor_message(
-                        f"Zbieram mala korekte {self._step_credit:.1f}/1.0 kroku",
-                        context,
-                    ),
-                )
-                continue
-
-            self._step_credit -= 1.0
-            self._last_burst_direction = desired_direction
             self._next_action_monotonic = now_monotonic + settle_seconds
             self.logger.info(
-                "Executing step meter=%s register=%s direction=%s mapped=%s remaining_credit=%.2f next_wait_s=%.1f",
+                "Executing PID step meter=%s register=%s direction=%s mapped=%s burst_steps=%s step_delay=%.4f next_wait_s=%.1f",
                 context.meter_id,
                 context.register_id,
                 desired_direction,
                 self._map_direction(desired_direction),
-                self._step_credit,
+                burst_steps,
+                step_delay_sec,
                 settle_seconds,
             )
             self._set_motor(
                 "RUNNING",
                 self._map_direction(desired_direction),
-                self._format_motor_message("Maly krok korekty", context),
-                burst_steps=1,
+                self._format_motor_message(f"PID korekta {burst_steps} krok", context),
+                burst_steps=burst_steps,
+                step_delay_sec=step_delay_sec,
             )
+            self._prev_error = error
+            self._last_error_monotonic = now_monotonic
+            self._last_error_sign = error_sign
 
     def _has_progress(self, distance: float) -> bool:
         if self._last_distance is None:
@@ -419,10 +393,11 @@ class MotorControlLoop:
         self._last_sample_update = None
         self._next_action_monotonic = None
         self._stable_since_monotonic = None
-        self._last_burst_direction = None
-        self._outside_band_samples = 0
-        self._step_credit = 0.0
-        self._step_credit_direction = None
+        self._prev_error = None
+        self._integral_error = 0.0
+        self._last_error_monotonic = None
+        self._overshoot_count = 0
+        self._last_error_sign = 0
         if not keep_last_key:
             self._runtime_direction_inverted = False
 
@@ -453,20 +428,38 @@ class MotorControlLoop:
         return "REVERSE" if logical_direction == "FORWARD" else "FORWARD"
 
     @staticmethod
-    def _step_fraction_for_distance(distance: float) -> float:
-        if distance > 50:
-            return 1.0
-        if distance > 30:
-            return 0.5
-        if distance > 10:
-            return 0.3
-        return 0.1
+    def _error_sign(value: float) -> int:
+        if value > 0:
+            return 1
+        if value < 0:
+            return -1
+        return 0
 
     @staticmethod
-    def _settle_seconds_for_distance(distance: float, base_seconds: float) -> float:
-        if distance > 50:
+    def _pid_burst_steps(distance: float, overshoot_count: int) -> int:
+        if overshoot_count >= 1:
+            return 1
+        if distance > 80:
+            return 3
+        if distance > 25:
+            return 2
+        return 1
+
+    @staticmethod
+    def _pid_step_delay(distance: float, overshoot_count: int) -> float:
+        base_delay = 0.12
+        if distance <= 10:
+            base_delay *= 1.4
+        elif distance <= 25:
+            base_delay *= 1.2
+        slowdown = 1.0 + (0.7 * overshoot_count)
+        return min(base_delay * slowdown, 1.0)
+
+    @staticmethod
+    def _pid_settle_seconds(distance: float, base_seconds: float) -> float:
+        if distance > 80:
             return min(base_seconds, 1.0)
-        if distance > 30:
+        if distance > 25:
             return min(base_seconds, 2.0)
         if distance > 10:
             return min(base_seconds, 3.0)
@@ -480,17 +473,31 @@ class MotorControlLoop:
             return True
         return False
 
-    def _set_motor(self, state_name: str, direction: str, message: str, burst_steps: int | None = None) -> None:
+    def _set_motor(
+        self,
+        state_name: str,
+        direction: str,
+        message: str,
+        burst_steps: int | None = None,
+        step_delay_sec: float | None = None,
+    ) -> None:
         try:
-            self.driver.set_direction(direction, burst_steps=burst_steps)
+            self.driver.set_direction(direction, burst_steps=burst_steps, step_delay_sec=step_delay_sec)
             self.state.set_motor_state(state_name, direction, message)
             self.logger.info(
-                "Motor state=%s direction=%s burst_steps=%s message=%s",
+                "Motor state=%s direction=%s burst_steps=%s step_delay=%s message=%s",
                 state_name,
                 direction,
                 burst_steps,
+                step_delay_sec,
                 message,
             )
         except Exception as exc:
-            self.logger.exception("Motor command failed state=%s direction=%s burst_steps=%s", state_name, direction, burst_steps)
+            self.logger.exception(
+                "Motor command failed state=%s direction=%s burst_steps=%s step_delay=%s",
+                state_name,
+                direction,
+                burst_steps,
+                step_delay_sec,
+            )
             self.state.set_motor_state("ERROR", "STOPPED", str(exc))
