@@ -12,7 +12,7 @@
   "interRegisterDelayMs": 0,
   "rememberCredentials": true,
   "controlLoopIntervalMs": 200,
-  "motorForwardCommand": "",
-  "motorReverseCommand": "",
-  "motorStopCommand": ""
+  "motorForwardCommand": "sh ./scripts/drv8825_forward.sh",
+  "motorReverseCommand": "sh ./scripts/drv8825_reverse.sh",
+  "motorStopCommand": "sh ./scripts/drv8825_stop.sh"
 }
