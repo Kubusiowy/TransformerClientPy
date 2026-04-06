@@ -167,6 +167,7 @@ class MotorControlLoop:
         self._next_action_monotonic: float | None = None
         self._stable_since_monotonic: float | None = None
         self._last_burst_direction: str | None = None
+        self._outside_band_samples = 0
         self._runtime_direction_inverted = False
 
     def update_config(self, config: ClientConfig) -> None:
@@ -214,6 +215,7 @@ class MotorControlLoop:
             raw_distance = abs(raw_delta)
             desired_direction = "FORWARD" if raw_delta > 0 else "REVERSE"
             settle_seconds = max(self.config.motorSettleMs, 0) / 1000.0
+            resume_threshold = threshold + max(self.config.motorProgressEpsilon * 4.0, 2.0)
             now_monotonic = time.monotonic()
             fresh_sample = self._consume_sample_update(context.last_update)
 
@@ -225,12 +227,13 @@ class MotorControlLoop:
                 self._next_action_monotonic = None
                 self._stable_since_monotonic = None
                 self._last_burst_direction = None
-                self._worsening_count = 0
+                self._outside_band_samples = 0
                 self._runtime_direction_inverted = False
 
             if raw_distance <= threshold:
                 self._last_distance = raw_distance
                 self._last_progress_monotonic = time.monotonic()
+                self._outside_band_samples = 0
                 if self._stable_since_monotonic is None:
                     self._stable_since_monotonic = now_monotonic
                 held_for = now_monotonic - self._stable_since_monotonic
@@ -247,7 +250,29 @@ class MotorControlLoop:
                         self._format_motor_message("Osiagnieto target", context),
                     )
                 continue
+
+            if self._stable_since_monotonic is not None and raw_distance <= resume_threshold:
+                self._outside_band_samples = 0
+                self._set_motor(
+                    "HOLDING",
+                    "STOPPED",
+                    self._format_motor_message("Lekko poza targetem, trzymam bez korekty", context),
+                )
+                continue
+
+            if self._stable_since_monotonic is not None:
+                if fresh_sample:
+                    self._outside_band_samples += 1
+                if self._outside_band_samples < 2:
+                    self._set_motor(
+                        "HOLDING",
+                        "STOPPED",
+                        self._format_motor_message("Czekam na potwierdzenie wyjscia poza zakres", context),
+                    )
+                    continue
+
             self._stable_since_monotonic = None
+            self._outside_band_samples = 0
 
             if fresh_sample:
                 if self._has_progress(raw_distance):
@@ -324,6 +349,7 @@ class MotorControlLoop:
         self._next_action_monotonic = None
         self._stable_since_monotonic = None
         self._last_burst_direction = None
+        self._outside_band_samples = 0
         if not keep_last_key:
             self._runtime_direction_inverted = False
 
