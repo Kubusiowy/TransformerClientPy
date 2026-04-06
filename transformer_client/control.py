@@ -164,12 +164,9 @@ class MotorControlLoop:
         self._last_distance: float | None = None
         self._last_progress_monotonic: float | None = None
         self._last_sample_update: datetime | None = None
-        self._last_sequence_update: datetime | None = None
-        self._last_sequence_direction: str | None = None
-        self._current_direction: str = "STOPPED"
-        self._pending_direction: str | None = None
-        self._pending_samples = 0
-        self._hold_until_monotonic: float | None = None
+        self._next_action_monotonic: float | None = None
+        self._stable_since_monotonic: float | None = None
+        self._last_burst_direction: str | None = None
         self._runtime_direction_inverted = False
 
     def update_config(self, config: ClientConfig) -> None:
@@ -216,10 +213,6 @@ class MotorControlLoop:
             raw_delta = context.target_value - current_value
             raw_distance = abs(raw_delta)
             desired_direction = "FORWARD" if raw_delta > 0 else "REVERSE"
-            reverse_threshold = max(
-                threshold * max(self.config.motorReverseThresholdMultiplier, 1.0),
-                threshold + self.config.motorProgressEpsilon,
-            )
             settle_seconds = max(self.config.motorSettleMs, 0) / 1000.0
             now_monotonic = time.monotonic()
             fresh_sample = self._consume_sample_update(context.last_update)
@@ -229,29 +222,32 @@ class MotorControlLoop:
                 self._last_distance = raw_distance
                 self._last_progress_monotonic = time.monotonic()
                 self._last_sample_update = context.last_update
-                self._last_sequence_update = None
-                self._last_sequence_direction = None
-                self._current_direction = "STOPPED"
-                self._pending_direction = None
-                self._pending_samples = 0
-                self._hold_until_monotonic = None
+                self._next_action_monotonic = None
+                self._stable_since_monotonic = None
+                self._last_burst_direction = None
+                self._worsening_count = 0
                 self._runtime_direction_inverted = False
 
             if raw_distance <= threshold:
-                self._current_direction = "STOPPED"
-                self._last_sequence_direction = None
-                self._last_sequence_update = None
-                self._pending_direction = None
-                self._pending_samples = 0
-                self._hold_until_monotonic = None
                 self._last_distance = raw_distance
                 self._last_progress_monotonic = time.monotonic()
-                self._set_motor(
-                    "TARGET_REACHED",
-                    "STOPPED",
-                    self._format_motor_message("Osiagnieto target", context),
-                )
+                if self._stable_since_monotonic is None:
+                    self._stable_since_monotonic = now_monotonic
+                held_for = now_monotonic - self._stable_since_monotonic
+                if held_for < settle_seconds:
+                    self._set_motor(
+                        "WAITING",
+                        "STOPPED",
+                        self._format_motor_message("Wartosc w threshold, obserwuje stabilnosc", context),
+                    )
+                else:
+                    self._set_motor(
+                        "TARGET_REACHED",
+                        "STOPPED",
+                        self._format_motor_message("Osiagnieto target", context),
+                    )
                 continue
+            self._stable_since_monotonic = None
 
             if fresh_sample:
                 if self._has_progress(raw_distance):
@@ -259,73 +255,37 @@ class MotorControlLoop:
                     self._last_progress_monotonic = time.monotonic()
                 elif (
                     self._last_distance is not None
+                    and self._last_burst_direction == desired_direction
                     and (raw_distance - self._last_distance) >= self.config.motorProgressEpsilon
-                    and self._last_sequence_direction == desired_direction
                 ):
                     self._runtime_direction_inverted = not self._runtime_direction_inverted
-                    self._last_sequence_direction = None
-                    self._last_sequence_update = None
-                    self._pending_direction = None
-                    self._pending_samples = 0
-                    self._hold_until_monotonic = now_monotonic + settle_seconds
+                    self._last_burst_direction = None
+                    self._next_action_monotonic = now_monotonic + settle_seconds
                     self._set_motor(
                         "HOLDING",
                         "STOPPED",
-                        self._format_motor_message("Ostatnia sekwencja pogorszyla blad, odwrocono kierunek", context),
+                        self._format_motor_message("Ostatni maly krok pogorszyl blad, odwrocono kierunek", context),
                     )
                     continue
 
-            if self._measurement_stale(context.last_update) or self._progress_timeout_exceeded():
+            if self._measurement_stale(context.last_update):
                 self._safety_stop(
                     self._format_motor_message(
-                        "Safety stop: brak postepu albo brak swiezego pomiaru",
+                        "Safety stop: brak swiezego pomiaru",
                         context,
                     )
                 )
                 continue
 
-            if self._hold_until_monotonic is not None and now_monotonic < self._hold_until_monotonic:
+            if self._next_action_monotonic is not None and now_monotonic < self._next_action_monotonic:
                 settle_label = f"{settle_seconds:.0f}" if settle_seconds.is_integer() else f"{settle_seconds:.1f}"
                 self._set_motor(
                     "WAITING",
                     "STOPPED",
-                    self._format_motor_message(f"Czekam {settle_label} s na ustabilizowanie", context),
+                    self._format_motor_message(f"Czekam {settle_label} s i obserwuje pomiar", context),
                 )
                 continue
-            self._hold_until_monotonic = None
-
-            if (
-                self._last_sequence_update is not None
-                and context.last_update is not None
-                and context.last_update <= self._last_sequence_update
-            ):
-                self._set_motor(
-                    "WAITING",
-                    "STOPPED",
-                    self._format_motor_message("Czekam na nowy pomiar po sekwencji", context),
-                )
-                continue
-
-            if self._last_sequence_direction is not None and desired_direction != self._last_sequence_direction:
-                if raw_distance <= reverse_threshold:
-                    self._set_motor(
-                        "HOLDING",
-                        "STOPPED",
-                        self._format_motor_message("Po przelocie jestem blisko targetu, nie cofam jeszcze", context),
-                    )
-                    continue
-                if self._pending_direction != desired_direction:
-                    self._pending_direction = desired_direction
-                    self._pending_samples = 1 if fresh_sample else 0
-                elif fresh_sample:
-                    self._pending_samples += 1
-                if self._pending_samples < max(self.config.motorReverseSamples, 1):
-                    self._set_motor(
-                        "HOLDING",
-                        "STOPPED",
-                        self._format_motor_message("Potwierdzam zmiane kierunku", context),
-                    )
-                    continue
+            self._next_action_monotonic = None
 
             if not fresh_sample and self._last_sample_update is not None:
                 self._set_motor(
@@ -335,18 +295,13 @@ class MotorControlLoop:
                 )
                 continue
 
-            self._current_direction = desired_direction
-            self._pending_direction = None
-            self._pending_samples = 0
-            self._last_sequence_direction = desired_direction
-            self._last_sequence_update = context.last_update
-            self._hold_until_monotonic = now_monotonic + settle_seconds
-            burst_steps = self._select_burst_steps(raw_distance)
+            self._last_burst_direction = desired_direction
+            self._next_action_monotonic = now_monotonic + settle_seconds
             self._set_motor(
                 "RUNNING",
                 self._map_direction(desired_direction),
-                self._format_motor_message(f"Sekwencja korekty ({burst_steps} krokow)", context),
-                burst_steps=burst_steps,
+                self._format_motor_message("Maly krok korekty", context),
+                burst_steps=1,
             )
 
     def _has_progress(self, distance: float) -> bool:
@@ -354,17 +309,11 @@ class MotorControlLoop:
             return True
         return (self._last_distance - distance) >= self.config.motorProgressEpsilon
 
-    def _progress_timeout_exceeded(self) -> bool:
-        if self._last_progress_monotonic is None:
-            return False
-        timeout_seconds = max(self.config.motorNoProgressTimeoutMs, 250) / 1000.0
-        return (time.monotonic() - self._last_progress_monotonic) >= timeout_seconds
-
     def _measurement_stale(self, last_update: datetime | None) -> bool:
         if last_update is None:
             return True
         age_seconds = (datetime.now() - last_update).total_seconds()
-        timeout_seconds = max(self.config.motorNoProgressTimeoutMs, 250) / 1000.0
+        timeout_seconds = max(self.config.motorNoProgressTimeoutMs, self.config.motorSettleMs + 2000, 250) / 1000.0
         return age_seconds >= timeout_seconds
 
     def _reset_progress_tracking(self, keep_last_key: bool = False) -> None:
@@ -372,12 +321,9 @@ class MotorControlLoop:
         self._last_distance = None
         self._last_progress_monotonic = None
         self._last_sample_update = None
-        self._last_sequence_update = None
-        self._last_sequence_direction = None
-        self._current_direction = "STOPPED"
-        self._pending_direction = None
-        self._pending_samples = 0
-        self._hold_until_monotonic = None
+        self._next_action_monotonic = None
+        self._stable_since_monotonic = None
+        self._last_burst_direction = None
         if not keep_last_key:
             self._runtime_direction_inverted = False
 
@@ -413,15 +359,6 @@ class MotorControlLoop:
             self._last_sample_update = last_update
             return True
         return False
-
-    def _select_burst_steps(self, distance: float) -> int:
-        if distance > 50:
-            return 8
-        if distance > 20:
-            return 4
-        if distance > 10:
-            return 2
-        return 1
 
     def _set_motor(self, state_name: str, direction: str, message: str, burst_steps: int | None = None) -> None:
         try:
