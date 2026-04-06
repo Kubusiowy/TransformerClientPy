@@ -168,6 +168,8 @@ class MotorControlLoop:
         self._stable_since_monotonic: float | None = None
         self._last_burst_direction: str | None = None
         self._outside_band_samples = 0
+        self._step_credit = 0.0
+        self._step_credit_direction: str | None = None
         self._runtime_direction_inverted = False
 
     def update_config(self, config: ClientConfig) -> None:
@@ -228,12 +230,16 @@ class MotorControlLoop:
                 self._stable_since_monotonic = None
                 self._last_burst_direction = None
                 self._outside_band_samples = 0
+                self._step_credit = 0.0
+                self._step_credit_direction = None
                 self._runtime_direction_inverted = False
 
             if raw_distance <= threshold:
                 self._last_distance = raw_distance
                 self._last_progress_monotonic = time.monotonic()
                 self._outside_band_samples = 0
+                self._step_credit = 0.0
+                self._step_credit_direction = None
                 if self._stable_since_monotonic is None:
                     self._stable_since_monotonic = now_monotonic
                 held_for = now_monotonic - self._stable_since_monotonic
@@ -285,6 +291,8 @@ class MotorControlLoop:
                 ):
                     self._runtime_direction_inverted = not self._runtime_direction_inverted
                     self._last_burst_direction = None
+                    self._step_credit = 0.0
+                    self._step_credit_direction = None
                     self._next_action_monotonic = now_monotonic + settle_seconds
                     self._set_motor(
                         "HOLDING",
@@ -320,6 +328,25 @@ class MotorControlLoop:
                 )
                 continue
 
+            step_fraction = self._step_fraction_for_distance(raw_distance)
+            if self._step_credit_direction != desired_direction:
+                self._step_credit_direction = desired_direction
+                self._step_credit = 0.0
+            self._step_credit += step_fraction
+
+            if self._step_credit < 1.0:
+                self._next_action_monotonic = now_monotonic + settle_seconds
+                self._set_motor(
+                    "HOLDING",
+                    "STOPPED",
+                    self._format_motor_message(
+                        f"Zbieram mala korekte {self._step_credit:.1f}/1.0 kroku",
+                        context,
+                    ),
+                )
+                continue
+
+            self._step_credit -= 1.0
             self._last_burst_direction = desired_direction
             self._next_action_monotonic = now_monotonic + settle_seconds
             self._set_motor(
@@ -350,6 +377,8 @@ class MotorControlLoop:
         self._stable_since_monotonic = None
         self._last_burst_direction = None
         self._outside_band_samples = 0
+        self._step_credit = 0.0
+        self._step_credit_direction = None
         if not keep_last_key:
             self._runtime_direction_inverted = False
 
@@ -377,6 +406,16 @@ class MotorControlLoop:
         if not effective_inverted:
             return logical_direction
         return "REVERSE" if logical_direction == "FORWARD" else "FORWARD"
+
+    @staticmethod
+    def _step_fraction_for_distance(distance: float) -> float:
+        if distance > 50:
+            return 1.0
+        if distance > 30:
+            return 0.5
+        if distance > 10:
+            return 0.3
+        return 0.1
 
     def _consume_sample_update(self, last_update: datetime | None) -> bool:
         if last_update is None:
