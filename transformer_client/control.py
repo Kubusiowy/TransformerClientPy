@@ -173,11 +173,6 @@ class MotorControlLoop:
         self._last_sample_update: datetime | None = None
         self._next_action_monotonic: float | None = None
         self._stable_since_monotonic: float | None = None
-        self._prev_error: float | None = None
-        self._integral_error = 0.0
-        self._last_error_monotonic: float | None = None
-        self._overshoot_count = 0
-        self._last_error_sign = 0
         self._runtime_direction_inverted = False
 
     def update_config(self, config: ClientConfig) -> None:
@@ -222,12 +217,11 @@ class MotorControlLoop:
             threshold = abs(context.threshold_value) if context.threshold_value is not None else 0.0
             current_value = context.current_value
             error = context.target_value - current_value
-            error_sign = self._error_sign(error)
             raw_distance = abs(error)
-            base_settle_seconds = max(self.config.motorSettleMs, 0) / 1000.0
-            settle_seconds = self._pid_settle_seconds(raw_distance, base_settle_seconds)
+            settle_seconds = max(self.config.motorSettleMs, 0) / 1000.0
             now_monotonic = time.monotonic()
             fresh_sample = self._consume_sample_update(context.last_update)
+            desired_direction = "FORWARD" if error > 0 else "REVERSE"
 
             if self._last_key != key:
                 self._last_key = key
@@ -236,14 +230,9 @@ class MotorControlLoop:
                 self._last_sample_update = context.last_update
                 self._next_action_monotonic = None
                 self._stable_since_monotonic = None
-                self._prev_error = None
-                self._integral_error = 0.0
-                self._last_error_monotonic = None
-                self._overshoot_count = 0
-                self._last_error_sign = 0
                 self._runtime_direction_inverted = False
                 self.logger.info(
-                    "PID init meter=%s register=%s target=%.4f threshold=%.4f live=%.4f unit=%s",
+                    "Simple control init meter=%s register=%s target=%.4f threshold=%.4f live=%.4f unit=%s",
                     context.meter_id,
                     context.register_id,
                     context.target_value,
@@ -264,14 +253,10 @@ class MotorControlLoop:
             if raw_distance <= threshold:
                 self._last_distance = raw_distance
                 self._last_progress_monotonic = time.monotonic()
-                self._integral_error *= 0.5
-                self._prev_error = error
-                self._last_error_monotonic = now_monotonic
-                self._last_error_sign = error_sign
                 if self._stable_since_monotonic is None:
                     self._stable_since_monotonic = now_monotonic
                 held_for = now_monotonic - self._stable_since_monotonic
-                if held_for < base_settle_seconds:
+                if held_for < settle_seconds:
                     self._set_motor(
                         "WAITING",
                         "STOPPED",
@@ -286,13 +271,16 @@ class MotorControlLoop:
                 continue
 
             self._stable_since_monotonic = None
+            if self._has_progress(raw_distance):
+                self._last_distance = raw_distance
+                self._last_progress_monotonic = time.monotonic()
 
             if self._next_action_monotonic is not None and now_monotonic < self._next_action_monotonic:
                 settle_label = f"{settle_seconds:.0f}" if settle_seconds.is_integer() else f"{settle_seconds:.1f}"
                 self._set_motor(
                     "WAITING",
                     "STOPPED",
-                    self._format_motor_message(f"Czekam {settle_label} s po korekcie PID", context),
+                    self._format_motor_message(f"Czekam {settle_label} s po malym kroku", context),
                 )
                 continue
             self._next_action_monotonic = None
@@ -305,38 +293,8 @@ class MotorControlLoop:
                 )
                 continue
 
-            dt = interval
-            if self._last_error_monotonic is not None:
-                dt = max(now_monotonic - self._last_error_monotonic, 0.05)
-
-            if fresh_sample and self._prev_error is not None and error_sign != 0 and self._last_error_sign != 0 and error_sign != self._last_error_sign:
-                self._overshoot_count = min(self._overshoot_count + 1, 6)
-                self._integral_error *= 0.5
-                self.logger.warning(
-                    "PID overshoot meter=%s register=%s prev_error=%.4f error=%.4f overshoot_count=%s",
-                    context.meter_id,
-                    context.register_id,
-                    self._prev_error,
-                    error,
-                    self._overshoot_count,
-                )
-            elif self._prev_error is not None and raw_distance < abs(self._prev_error):
-                self._overshoot_count = max(self._overshoot_count - 1, 0)
-
-            self._integral_error += error * dt
-            self._integral_error = max(min(self._integral_error, 500.0), -500.0)
-            derivative = 0.0
-            if self._prev_error is not None:
-                derivative = (error - self._prev_error) / dt
-
-            pid_output = (0.12 * error) + (0.01 * self._integral_error) + (0.04 * derivative)
-            if abs(pid_output) < 0.001:
-                pid_output = error
-            desired_direction = "FORWARD" if pid_output > 0 else "REVERSE"
-            burst_steps = self._pid_burst_steps(raw_distance, self._overshoot_count)
-            step_delay_sec = self._pid_step_delay(raw_distance, self._overshoot_count)
             self.logger.info(
-                "PID decision meter=%s register=%s live=%.4f target=%.4f error=%.4f distance=%.4f threshold=%.4f integral=%.4f derivative=%.4f pid=%.4f overshoot_count=%s burst_steps=%s step_delay=%.4f wait_s=%.1f",
+                "Simple decision meter=%s register=%s live=%.4f target=%.4f error=%.4f distance=%.4f threshold=%.4f direction=%s burst_steps=%s step_delay=%.4f wait_s=%.1f",
                 context.meter_id,
                 context.register_id,
                 current_value,
@@ -344,35 +302,30 @@ class MotorControlLoop:
                 error,
                 raw_distance,
                 threshold,
-                self._integral_error,
-                derivative,
-                pid_output,
-                self._overshoot_count,
-                burst_steps,
-                step_delay_sec,
+                desired_direction,
+                1,
+                max(self.config.motorStepDelaySec, 0.12),
                 settle_seconds,
             )
+            step_delay_sec = max(self.config.motorStepDelaySec, 0.12)
             self._next_action_monotonic = now_monotonic + settle_seconds
             self.logger.info(
-                "Executing PID step meter=%s register=%s direction=%s mapped=%s burst_steps=%s step_delay=%.4f next_wait_s=%.1f",
+                "Executing simple step meter=%s register=%s direction=%s mapped=%s burst_steps=%s step_delay=%.4f next_wait_s=%.1f",
                 context.meter_id,
                 context.register_id,
                 desired_direction,
                 self._map_direction(desired_direction),
-                burst_steps,
+                1,
                 step_delay_sec,
                 settle_seconds,
             )
             self._set_motor(
                 "RUNNING",
                 self._map_direction(desired_direction),
-                self._format_motor_message(f"PID korekta {burst_steps} krok", context),
-                burst_steps=burst_steps,
+                self._format_motor_message("Maly krok w strone targetu", context),
+                burst_steps=1,
                 step_delay_sec=step_delay_sec,
             )
-            self._prev_error = error
-            self._last_error_monotonic = now_monotonic
-            self._last_error_sign = error_sign
 
     def _has_progress(self, distance: float) -> bool:
         if self._last_distance is None:
@@ -393,11 +346,6 @@ class MotorControlLoop:
         self._last_sample_update = None
         self._next_action_monotonic = None
         self._stable_since_monotonic = None
-        self._prev_error = None
-        self._integral_error = 0.0
-        self._last_error_monotonic = None
-        self._overshoot_count = 0
-        self._last_error_sign = 0
         if not keep_last_key:
             self._runtime_direction_inverted = False
 
@@ -426,44 +374,6 @@ class MotorControlLoop:
         if not effective_inverted:
             return logical_direction
         return "REVERSE" if logical_direction == "FORWARD" else "FORWARD"
-
-    @staticmethod
-    def _error_sign(value: float) -> int:
-        if value > 0:
-            return 1
-        if value < 0:
-            return -1
-        return 0
-
-    @staticmethod
-    def _pid_burst_steps(distance: float, overshoot_count: int) -> int:
-        if overshoot_count >= 1:
-            return 1
-        if distance > 80:
-            return 3
-        if distance > 25:
-            return 2
-        return 1
-
-    @staticmethod
-    def _pid_step_delay(distance: float, overshoot_count: int) -> float:
-        base_delay = 0.12
-        if distance <= 10:
-            base_delay *= 1.4
-        elif distance <= 25:
-            base_delay *= 1.2
-        slowdown = 1.0 + (0.7 * overshoot_count)
-        return min(base_delay * slowdown, 1.0)
-
-    @staticmethod
-    def _pid_settle_seconds(distance: float, base_seconds: float) -> float:
-        if distance > 80:
-            return min(base_seconds, 1.0)
-        if distance > 25:
-            return min(base_seconds, 2.0)
-        if distance > 10:
-            return min(base_seconds, 3.0)
-        return base_seconds
 
     def _consume_sample_update(self, last_update: datetime | None) -> bool:
         if last_update is None:
