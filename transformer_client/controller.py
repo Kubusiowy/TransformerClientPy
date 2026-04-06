@@ -95,6 +95,8 @@ class LiveClientController:
         threshold_value: float | None,
         activate: bool,
     ) -> None:
+        if activate and target_value is None:
+            raise MotorControlError("Przed aktywacja ustaw wartosc docelowa i kliknij Apply.")
         if activate and self.control_store.active_key is not None and self.control_store.active_key != (meter_id, register_id):
             raise MotorControlError("Aktywny moze byc tylko jeden rejestr. Najpierw zatrzymaj obecny.")
         self.control_store.set_control(meter_id, register_id, target_value, threshold_value, activate)

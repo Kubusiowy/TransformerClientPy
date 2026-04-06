@@ -43,21 +43,14 @@ class RegisterControlStore:
             )
             controls[control.key] = control
 
-        active = payload.get("activeRegister")
         self.controls = controls
-        self.active_key = (
-            (int(active["meterId"]), int(active["registerId"]))
-            if isinstance(active, dict) and active.get("meterId") is not None and active.get("registerId") is not None
-            else None
-        )
+        # Active motor control is intentionally runtime-only.
+        # After application restart, no register should start driving automatically.
+        self.active_key = None
 
     def save(self) -> None:
         payload = {
-            "activeRegister": (
-                {"meterId": self.active_key[0], "registerId": self.active_key[1]}
-                if self.active_key is not None
-                else None
-            ),
+            "activeRegister": None,
             "registers": [asdict(control) for control in sorted(self.controls.values(), key=lambda item: item.key)],
         }
         self.path.write_text(json.dumps(payload, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
@@ -71,6 +64,8 @@ class RegisterControlStore:
         activate: bool,
     ) -> None:
         key = (meter_id, register_id)
+        if activate and target_value is None:
+            raise MotorControlError("Przed aktywacja ustaw targetValue i kliknij Apply.")
         self.controls[key] = RegisterControl(
             meterId=meter_id,
             registerId=register_id,
