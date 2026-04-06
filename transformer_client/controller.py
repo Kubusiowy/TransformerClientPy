@@ -33,6 +33,7 @@ class TargetExceededSmsMonitor:
         self._last_key: tuple[int, int] | None = None
         self._was_above_limit = False
         self._last_sent_at_by_key: dict[tuple[int, int], float] = {}
+        self._threshold_above_by_key: dict[tuple[int, int], bool] = {}
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -52,11 +53,14 @@ class TargetExceededSmsMonitor:
             if not config.smsEnabled or not config.smsApiKey.strip() or not config.smsPhoneNumbers:
                 self._last_key = None
                 self._was_above_limit = False
+                self._threshold_above_by_key.clear()
                 continue
 
             context = self.state.get_active_control_context()
             snapshot = self.state.snapshot()
             transformer = snapshot["selected_transformer"]
+            transformer_name = transformer.name if transformer is not None else "-"
+            self._check_threshold_alerts(snapshot["rows"], transformer_name, config)
             if context is None or context.current_value is None or context.target_value is None:
                 self._last_key = None
                 self._was_above_limit = False
@@ -75,7 +79,6 @@ class TargetExceededSmsMonitor:
                     cooldown_seconds = max(config.smsAlertCooldownMs, 0) / 1000.0
                     last_sent_at = self._last_sent_at_by_key.get(key, 0.0)
                     if now - last_sent_at >= cooldown_seconds:
-                        transformer_name = transformer.name if transformer is not None else "-"
                         unit = context.unit or ""
                         unit_suffix = f" {unit}" if unit else ""
                         message = (
@@ -103,6 +106,52 @@ class TargetExceededSmsMonitor:
                 self._was_above_limit = True
             else:
                 self._was_above_limit = False
+
+    def _check_threshold_alerts(self, rows, transformer_name: str, config) -> None:
+        active_keys: set[tuple[int, int]] = set()
+        for row in rows:
+            key = (row.meter_id, row.register_id)
+            threshold_value = row.sms_alert_threshold_value
+            if threshold_value is None or row.value is None:
+                self._threshold_above_by_key.pop(key, None)
+                continue
+
+            active_keys.add(key)
+            delta = row.value - threshold_value
+            if delta > 0:
+                if not self._threshold_above_by_key.get(key, False):
+                    now = time.monotonic()
+                    cooldown_seconds = max(config.smsAlertCooldownMs, 0) / 1000.0
+                    last_sent_at = self._last_sent_at_by_key.get(key, 0.0)
+                    if now - last_sent_at >= cooldown_seconds:
+                        unit_suffix = f" {row.unit}" if row.unit else ""
+                        message = (
+                            f"Przekroczenie progu SMS. Transformer: {transformer_name}. "
+                            f"Rejestr: {row.meter_name}/{row.register_name}. "
+                            f"Pomiar: {row.value:.2f}{unit_suffix}. "
+                            f"Prog SMS: {threshold_value:.2f}{unit_suffix}. "
+                            f"Przekroczenie: {delta:.2f}{unit_suffix}."
+                        )
+                        try:
+                            self.send_callback(message)
+                            self._last_sent_at_by_key[key] = now
+                            self.logger.info(
+                                "Threshold SMS sent meter=%s register=%s live=%.4f threshold=%.4f delta=%.4f",
+                                row.meter_id,
+                                row.register_id,
+                                row.value,
+                                threshold_value,
+                                delta,
+                            )
+                        except Exception as exc:
+                            self.logger.error("Threshold SMS failed: %s", exc)
+                self._threshold_above_by_key[key] = True
+            else:
+                self._threshold_above_by_key[key] = False
+
+        stale_keys = set(self._threshold_above_by_key) - active_keys
+        for key in stale_keys:
+            self._threshold_above_by_key.pop(key, None)
 
 
 class LiveClientController:
@@ -236,6 +285,21 @@ class LiveClientController:
         self.state.clear_active_control()
         self.logger.info("Active register control cleared")
 
+    def set_register_sms_alert_threshold(
+        self,
+        meter_id: int,
+        register_id: int,
+        sms_alert_threshold_value: float | None,
+    ) -> None:
+        self.control_store.set_sms_alert_threshold(meter_id, register_id, sms_alert_threshold_value)
+        self.state.set_register_sms_alert_threshold(meter_id, register_id, sms_alert_threshold_value)
+        self.logger.info(
+            "Register SMS threshold updated meter=%s register=%s sms_threshold=%s",
+            meter_id,
+            register_id,
+            sms_alert_threshold_value,
+        )
+
     def update_sms_settings(
         self,
         enabled: bool,
@@ -253,8 +317,11 @@ class LiveClientController:
         )
 
     def send_test_sms(self) -> str:
+        snapshot = self.state.snapshot()
+        transformer = snapshot["selected_transformer"]
+        transformer_name = transformer.name if transformer is not None else "-"
         message = (
-            f"Test SMS z Transformer Client. Transformer={self.config.transformerId or '-'}."
+            f"Test SMS z Transformer Client. Transformer={transformer_name}."
         )
         result = self.send_sms_message(message)
         self.logger.info("Test SMS requested result=%s", result)

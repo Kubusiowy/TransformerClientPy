@@ -34,6 +34,7 @@ class LiveClientApp:
         self.current_value_var = tk.StringVar(value="-")
         self.control_target_var = tk.StringVar(value="")
         self.control_threshold_var = tk.StringVar(value="")
+        self.sms_threshold_var = tk.StringVar(value="")
         self.activate_control_var = tk.BooleanVar(value=False)
         self.sms_enabled_var = tk.BooleanVar(value=self.controller.config.smsEnabled)
         self.sms_numbers_var = tk.StringVar(value=", ".join(self.controller.config.smsPhoneNumbers))
@@ -51,10 +52,12 @@ class LiveClientApp:
         self._target_dirty = False
         self._threshold_dirty = False
         self._activate_dirty = False
+        self._sms_threshold_dirty = False
 
         self.control_target_var.trace_add("write", self._on_target_change)
         self.control_threshold_var.trace_add("write", self._on_threshold_change)
         self.activate_control_var.trace_add("write", self._on_activate_change)
+        self.sms_threshold_var.trace_add("write", self._on_sms_threshold_change)
 
         self._build_login_view()
 
@@ -158,8 +161,31 @@ class LiveClientApp:
         ttk.Button(control_frame, text="Apply", command=self._apply_control).grid(row=2, column=2, sticky="e", padx=6)
         ttk.Button(control_frame, text="Stop control", command=self._clear_active_control).grid(row=2, column=3, sticky="w")
 
+        sms_threshold_frame = ttk.LabelFrame(control_frame, text="Osobny prog SMS", padding=10)
+        sms_threshold_frame.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(12, 0))
+        sms_threshold_frame.columnconfigure(1, weight=1)
+        ttk.Label(sms_threshold_frame, text="Prog alertu SMS").grid(row=0, column=0, sticky="w", pady=4)
+        ttk.Entry(sms_threshold_frame, textvariable=self.sms_threshold_var, width=18).grid(
+            row=0,
+            column=1,
+            sticky="w",
+            pady=4,
+        )
+        ttk.Button(sms_threshold_frame, text="Zapisz prog SMS", command=self._apply_sms_threshold).grid(
+            row=0,
+            column=2,
+            sticky="w",
+            padx=6,
+            pady=4,
+        )
+        ttk.Label(
+            sms_threshold_frame,
+            text="Po przekroczeniu tego progu poleci osobny SMS dla wybranego rejestru.",
+            foreground="#444",
+        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(2, 0))
+
         sms_frame = ttk.LabelFrame(control_frame, text="Powiadomienia SMS", padding=10)
-        sms_frame.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(12, 0))
+        sms_frame.grid(row=4, column=0, columnspan=4, sticky="ew", pady=(12, 0))
         sms_frame.columnconfigure(1, weight=1)
         sms_frame.columnconfigure(3, weight=1)
 
@@ -361,12 +387,14 @@ class LiveClientApp:
         try:
             self.control_target_var.set("" if row.target_value is None else str(row.target_value))
             self.control_threshold_var.set("" if row.threshold_value is None else str(row.threshold_value))
+            self.sms_threshold_var.set("" if row.sms_alert_threshold_value is None else str(row.sms_alert_threshold_value))
             self.activate_control_var.set(row.control_active)
         finally:
             self._programmatic_form_update = False
         self._target_dirty = False
         self._threshold_dirty = False
         self._activate_dirty = False
+        self._sms_threshold_dirty = False
 
     def _update_selected_row_live(self, row: UiRow) -> None:
         self.selected_register_var.set(f"{row.meter_name} / {row.register_name} ({row.register_id})")
@@ -387,6 +415,12 @@ class LiveClientApp:
             self._programmatic_form_update = True
             try:
                 self.activate_control_var.set(row.control_active)
+            finally:
+                self._programmatic_form_update = False
+        if not self._sms_threshold_dirty:
+            self._programmatic_form_update = True
+            try:
+                self.sms_threshold_var.set("" if row.sms_alert_threshold_value is None else str(row.sms_alert_threshold_value))
             finally:
                 self._programmatic_form_update = False
 
@@ -410,6 +444,23 @@ class LiveClientApp:
         self._target_dirty = False
         self._threshold_dirty = False
         self._activate_dirty = False
+        self._refresh_ui()
+
+    def _apply_sms_threshold(self) -> None:
+        row = self._require_selected_row()
+        if row is None:
+            return
+        try:
+            sms_threshold = parse_optional_float(self.sms_threshold_var.get())
+            self.controller.set_register_sms_alert_threshold(
+                row.meter_id,
+                row.register_id,
+                sms_threshold,
+            )
+        except (ValueError, KeyError) as exc:
+            messagebox.showerror("SMS", str(exc))
+            return
+        self._sms_threshold_dirty = False
         self._refresh_ui()
 
     def _clear_active_control(self) -> None:
@@ -463,12 +514,14 @@ class LiveClientApp:
         try:
             self.control_target_var.set("")
             self.control_threshold_var.set("")
+            self.sms_threshold_var.set("")
             self.activate_control_var.set(False)
         finally:
             self._programmatic_form_update = False
         self._target_dirty = False
         self._threshold_dirty = False
         self._activate_dirty = False
+        self._sms_threshold_dirty = False
 
     def _on_target_change(self, *_args) -> None:
         if not self._programmatic_form_update:
@@ -481,6 +534,10 @@ class LiveClientApp:
     def _on_activate_change(self, *_args) -> None:
         if not self._programmatic_form_update:
             self._activate_dirty = True
+
+    def _on_sms_threshold_change(self, *_args) -> None:
+        if not self._programmatic_form_update:
+            self._sms_threshold_dirty = True
 
     def _refresh_config_async(self) -> None:
         self.backend_error_var.set("Refreshing configuration...")

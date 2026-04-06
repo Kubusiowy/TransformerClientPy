@@ -45,6 +45,9 @@ class RegisterControlStore:
                 registerId=int(item["registerId"]),
                 targetValue=float(item["targetValue"]) if item.get("targetValue") is not None else None,
                 thresholdValue=float(item["thresholdValue"]) if item.get("thresholdValue") is not None else None,
+                smsAlertThresholdValue=(
+                    float(item["smsAlertThresholdValue"]) if item.get("smsAlertThresholdValue") is not None else None
+                ),
             )
             controls[control.key] = control
 
@@ -76,11 +79,29 @@ class RegisterControlStore:
             registerId=register_id,
             targetValue=target_value,
             thresholdValue=threshold_value,
+            smsAlertThresholdValue=self.controls.get(key).smsAlertThresholdValue if key in self.controls else None,
         )
         if activate:
             if self.active_key is not None and self.active_key != key:
                 raise MotorControlError("Aktywny moze byc tylko jeden rejestr. Najpierw go zatrzymaj.")
             self.active_key = key
+        self.save()
+
+    def set_sms_alert_threshold(
+        self,
+        meter_id: int,
+        register_id: int,
+        sms_alert_threshold_value: float | None,
+    ) -> None:
+        key = (meter_id, register_id)
+        existing = self.controls.get(key)
+        self.controls[key] = RegisterControl(
+            meterId=meter_id,
+            registerId=register_id,
+            targetValue=existing.targetValue if existing is not None else None,
+            thresholdValue=existing.thresholdValue if existing is not None else None,
+            smsAlertThresholdValue=sms_alert_threshold_value,
+        )
         self.save()
 
     def clear_active(self) -> None:

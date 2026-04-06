@@ -22,6 +22,7 @@ class UiRow:
     value: float | None
     target_value: float | None
     threshold_value: float | None
+    sms_alert_threshold_value: float | None
     control_active: bool
     unit: str | None
     updated_at: datetime | None
@@ -150,6 +151,23 @@ class ApplicationState:
             if active:
                 self._active_control_key = key
 
+    def set_register_sms_alert_threshold(
+        self,
+        meter_id: int,
+        register_id: int,
+        sms_alert_threshold_value: float | None,
+    ) -> None:
+        with self._lock:
+            key = (meter_id, register_id)
+            existing = self._controls.get(key)
+            self._controls[key] = RegisterControl(
+                meterId=meter_id,
+                registerId=register_id,
+                targetValue=existing.targetValue if existing is not None else None,
+                thresholdValue=existing.thresholdValue if existing is not None else None,
+                smsAlertThresholdValue=sms_alert_threshold_value,
+            )
+
     def clear_active_control(self) -> None:
         with self._lock:
             self._active_control_key = None
@@ -217,6 +235,7 @@ class ApplicationState:
                             value=state.value if state else None,
                             target_value=register.targetValue,
                             threshold_value=register.thresholdValue,
+                            sms_alert_threshold_value=self._controls.get(key).smsAlertThresholdValue if key in self._controls else None,
                             control_active=key == self._active_control_key,
                             unit=register.unit,
                             updated_at=state.lastUpdate if state else None,
@@ -334,6 +353,9 @@ class ApplicationState:
             value=state.value if state else None,
             target_value=register.targetValue,
             threshold_value=register.thresholdValue,
+            sms_alert_threshold_value=self._controls.get((meter_id, register_id)).smsAlertThresholdValue
+            if (meter_id, register_id) in self._controls
+            else None,
             control_active=True,
             unit=register.unit,
             updated_at=state.lastUpdate if state else None,

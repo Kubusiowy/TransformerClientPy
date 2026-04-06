@@ -294,6 +294,7 @@ class RegisterControl:
     registerId: int
     targetValue: float | None
     thresholdValue: float | None
+    smsAlertThresholdValue: float | None = None
 
     @property
     def key(self) -> tuple[int, int]:
