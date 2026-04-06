@@ -56,6 +56,7 @@ class ApplicationState:
         self._motor_message: str = "Brak aktywnego rejestru."
         self._metrics_state: str = "DISCONNECTED"
         self._metrics_error: str | None = None
+        self._metric_points: dict[tuple[str, str], dict] = {}
 
     def apply_configuration(
         self,
@@ -162,6 +163,14 @@ class ApplicationState:
             self._metrics_state = state_name
             self._metrics_error = error_message
 
+    def merge_metric_point(self, point: dict) -> None:
+        key = point.get("key")
+        bucket_ts = point.get("bucketTs")
+        if not key or not bucket_ts:
+            return
+        with self._lock:
+            self._metric_points[(str(key), str(bucket_ts))] = dict(point)
+
     def get_active_control_context(self) -> ActiveControlContext | None:
         with self._lock:
             if self._active_control_key is None:
@@ -256,6 +265,27 @@ class ApplicationState:
                 "sentAt": datetime.now().isoformat(),
                 "metrics": metrics,
             }
+
+    def metrics_messages(self) -> list[dict]:
+        with self._lock:
+            messages: list[dict] = []
+            for meter in sorted(self._meters.values(), key=lambda item: item.id):
+                for register in self._registers_by_meter.get(meter.id, ()):
+                    state = self._register_states.get((meter.id, register.id))
+                    if state is None or state.value is None or state.lastUpdate is None:
+                        continue
+                    key = f"{meter.deviceCode}.{register.name}" if meter.deviceCode else register.name
+                    label = f"{meter.name} / {register.name}"
+                    messages.append(
+                        {
+                            "metricKey": key,
+                            "value": state.value,
+                            "timestamp": state.lastUpdate,
+                            "unit": register.unit,
+                            "label": label,
+                        }
+                    )
+            return messages
 
     def _find_register(self, key: tuple[int, int]) -> RegisterDto | None:
         meter_id, register_id = key
