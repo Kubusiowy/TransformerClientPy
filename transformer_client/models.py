@@ -22,6 +22,8 @@ DEFAULT_CLIENT_CONFIG: dict[str, Any] = {
     "motorNoProgressTimeoutMs": 1500,
     "motorProgressEpsilon": 0.05,
     "metricsPublishMs": 500,
+    "motorBurstSteps": 6,
+    "motorStepDelaySec": 0.008,
     "motorForwardCommand": "",
     "motorReverseCommand": "",
     "motorStopCommand": "",
@@ -46,6 +48,8 @@ class ClientConfig:
     motorNoProgressTimeoutMs: int = DEFAULT_CLIENT_CONFIG["motorNoProgressTimeoutMs"]
     motorProgressEpsilon: float = DEFAULT_CLIENT_CONFIG["motorProgressEpsilon"]
     metricsPublishMs: int = DEFAULT_CLIENT_CONFIG["metricsPublishMs"]
+    motorBurstSteps: int = DEFAULT_CLIENT_CONFIG["motorBurstSteps"]
+    motorStepDelaySec: float = DEFAULT_CLIENT_CONFIG["motorStepDelaySec"]
     motorForwardCommand: str = DEFAULT_CLIENT_CONFIG["motorForwardCommand"]
     motorReverseCommand: str = DEFAULT_CLIENT_CONFIG["motorReverseCommand"]
     motorStopCommand: str = DEFAULT_CLIENT_CONFIG["motorStopCommand"]
@@ -70,6 +74,8 @@ class ClientConfig:
             motorNoProgressTimeoutMs=int(merged["motorNoProgressTimeoutMs"]),
             motorProgressEpsilon=float(merged["motorProgressEpsilon"]),
             metricsPublishMs=int(merged["metricsPublishMs"]),
+            motorBurstSteps=int(merged["motorBurstSteps"]),
+            motorStepDelaySec=float(merged["motorStepDelaySec"]),
             motorForwardCommand=str(merged["motorForwardCommand"]),
             motorReverseCommand=str(merged["motorReverseCommand"]),
             motorStopCommand=str(merged["motorStopCommand"]),
@@ -93,6 +99,8 @@ class ClientConfig:
             "motorNoProgressTimeoutMs": self.motorNoProgressTimeoutMs,
             "motorProgressEpsilon": self.motorProgressEpsilon,
             "metricsPublishMs": self.metricsPublishMs,
+            "motorBurstSteps": self.motorBurstSteps,
+            "motorStepDelaySec": self.motorStepDelaySec,
             "motorForwardCommand": self.motorForwardCommand,
             "motorReverseCommand": self.motorReverseCommand,
             "motorStopCommand": self.motorStopCommand,

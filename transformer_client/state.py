@@ -31,10 +31,12 @@ class UiRow:
 class ActiveControlContext:
     meter_id: int
     register_id: int
+    meter_name: str
     register_name: str
     current_value: float | None
     target_value: float | None
     threshold_value: float | None
+    unit: str | None
     last_update: datetime | None
 
 
@@ -175,18 +177,19 @@ class ApplicationState:
         with self._lock:
             if self._active_control_key is None:
                 return None
-            control = self._controls.get(self._active_control_key)
-            state = self._register_states.get(self._active_control_key)
-            if control is None or state is None:
+            row = self._build_active_control_row()
+            if row is None:
                 return None
             return ActiveControlContext(
-                meter_id=control.meterId,
-                register_id=control.registerId,
-                register_name=state.register.name,
-                current_value=state.value,
-                target_value=control.targetValue,
-                threshold_value=control.thresholdValue,
-                last_update=state.lastUpdate,
+                meter_id=row.meter_id,
+                register_id=row.register_id,
+                meter_name=row.meter_name,
+                register_name=row.register_name,
+                current_value=row.value,
+                target_value=row.target_value,
+                threshold_value=row.threshold_value,
+                unit=row.unit,
+                last_update=row.updated_at,
             )
 
     def snapshot(self) -> dict:
@@ -305,6 +308,36 @@ class ApplicationState:
         state = self._register_states.get(key)
         if state is not None:
             state.register = updated
+
+    def _build_active_control_row(self) -> UiRow | None:
+        if self._active_control_key is None:
+            return None
+        meter_id, register_id = self._active_control_key
+        meter = self._meters.get(meter_id)
+        register = self._find_register((meter_id, register_id))
+        if meter is None or register is None:
+            return None
+        state = self._register_states.get((meter_id, register_id))
+        status = self._meter_statuses.get(meter_id, MeterStatus.CONNECTING)
+        error = self._meter_errors.get(meter_id)
+        return UiRow(
+            meter_id=meter.id,
+            meter_name=meter.name,
+            serial_port=meter.serialPort,
+            status=status,
+            error=error,
+            register_id=register.id,
+            register_name=register.name,
+            register_type=register.registerType,
+            address=register.address,
+            data_type=register.dataType,
+            value=state.value if state else None,
+            target_value=register.targetValue,
+            threshold_value=register.thresholdValue,
+            control_active=True,
+            unit=register.unit,
+            updated_at=state.lastUpdate if state else None,
+        )
 
 
 def _sort_registers(registers: list[RegisterDto]) -> list[RegisterDto]:

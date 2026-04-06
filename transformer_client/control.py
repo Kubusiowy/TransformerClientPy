@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import threading
 import time
@@ -94,13 +95,14 @@ class RegisterControlStore:
 
 class CommandMotorDriver:
     def __init__(self, config: ClientConfig) -> None:
+        self.config = config
         self.forward_command = config.motorForwardCommand.strip()
         self.reverse_command = config.motorReverseCommand.strip()
         self.stop_command = config.motorStopCommand.strip()
         self._last_direction = "STOPPED"
 
     def set_direction(self, direction: str) -> None:
-        if direction == self._last_direction:
+        if direction == "STOPPED" and direction == self._last_direction:
             return
         command = self._command_for(direction)
         if not command:
@@ -111,7 +113,19 @@ class CommandMotorDriver:
                 "Brak komend silnika w client-config.json. Ustaw motorForwardCommand, motorReverseCommand i motorStopCommand."
             )
 
-        result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=5, check=False)
+        result = subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+            env={
+                **os.environ,
+                "MOTOR_BURST_STEPS": str(self.config.motorBurstSteps),
+                "MOTOR_STEP_DELAY_SEC": str(self.config.motorStepDelaySec),
+            },
+        )
         if result.returncode != 0:
             stderr = result.stderr.strip() or result.stdout.strip() or "Motor command failed."
             raise MotorControlError(stderr)
@@ -198,7 +212,7 @@ class MotorControlLoop:
                 self._set_motor(
                     "TARGET_REACHED",
                     "STOPPED",
-                    f"Osiagnieto target dla {context.register_name}: {context.current_value:.4f}",
+                    self._format_motor_message("Osiagnieto target", context),
                 )
                 continue
 
@@ -208,7 +222,10 @@ class MotorControlLoop:
 
             if self._measurement_stale(context.last_update) or self._progress_timeout_exceeded():
                 self._safety_stop(
-                    f"Safety stop dla {context.register_name}: brak postepu albo brak swiezego pomiaru."
+                    self._format_motor_message(
+                        "Safety stop: brak postepu albo brak swiezego pomiaru",
+                        context,
+                    )
                 )
                 continue
 
@@ -216,13 +233,13 @@ class MotorControlLoop:
                 self._set_motor(
                     "RUNNING",
                     "FORWARD",
-                    f"Silnik do przodu dla {context.register_name}: {context.current_value:.4f} -> {context.target_value:.4f}",
+                    self._format_motor_message("Korekta do gory", context),
                 )
             else:
                 self._set_motor(
                     "RUNNING",
                     "REVERSE",
-                    f"Silnik do tylu dla {context.register_name}: {context.current_value:.4f} -> {context.target_value:.4f}",
+                    self._format_motor_message("Korekta w dol", context),
                 )
 
     def _has_progress(self, distance: float) -> bool:
@@ -256,6 +273,16 @@ class MotorControlLoop:
             pass
         self.clear_active_callback()
         self.state.set_motor_state("SAFETY_STOP", "STOPPED", message)
+
+    @staticmethod
+    def _format_motor_message(prefix: str, context) -> str:
+        unit = context.unit or ""
+        unit_suffix = f" {unit}" if unit else ""
+        return (
+            f"{prefix}: {context.meter_name} / {context.register_name} | "
+            f"live={context.current_value:.4f}{unit_suffix} | "
+            f"target={context.target_value:.4f}{unit_suffix}"
+        )
 
     def _set_motor(self, state_name: str, direction: str, message: str) -> None:
         try:
