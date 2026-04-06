@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from threading import RLock
 
-from transformer_client.models import MeterDto, MeterStatus, RegisterDto, RegisterState, TransformerDto
+from transformer_client.models import MeterDto, MeterStatus, RegisterControl, RegisterDto, RegisterState, TransformerDto
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,8 +20,21 @@ class UiRow:
     address: int
     data_type: str
     value: float | None
+    target_value: float | None
+    threshold_value: float | None
+    control_active: bool
     unit: str | None
     updated_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class ActiveControlContext:
+    meter_id: int
+    register_id: int
+    register_name: str
+    current_value: float | None
+    target_value: float | None
+    threshold_value: float | None
 
 
 class ApplicationState:
@@ -32,9 +45,14 @@ class ApplicationState:
         self._meters: dict[int, MeterDto] = {}
         self._registers_by_meter: dict[int, tuple[RegisterDto, ...]] = {}
         self._register_states: dict[tuple[int, int], RegisterState] = {}
+        self._controls: dict[tuple[int, int], RegisterControl] = {}
+        self._active_control_key: tuple[int, int] | None = None
         self._meter_statuses: dict[int, str] = {}
         self._meter_errors: dict[int, str | None] = {}
         self._last_backend_error: str | None = None
+        self._motor_state: str = "IDLE"
+        self._motor_direction: str = "STOPPED"
+        self._motor_message: str = "Brak aktywnego rejestru."
 
     def apply_configuration(
         self,
@@ -42,6 +60,8 @@ class ApplicationState:
         selected_transformer: TransformerDto,
         meters: list[MeterDto],
         registers_by_meter: dict[int, list[RegisterDto]],
+        controls: dict[tuple[int, int], RegisterControl],
+        active_control_key: tuple[int, int] | None,
     ) -> None:
         with self._lock:
             self._transformers = tuple(transformers)
@@ -66,6 +86,8 @@ class ApplicationState:
                 for meter in meters
             }
             self._meter_errors = {meter.id: self._meter_errors.get(meter.id) for meter in meters}
+            self._controls = {key: value for key, value in controls.items() if key in next_states}
+            self._active_control_key = active_control_key if active_control_key in self._controls else None
             self._last_backend_error = None
 
     def set_meter_status(self, meter_id: int, status: str, error_message: str | None = None) -> None:
@@ -97,6 +119,58 @@ class ApplicationState:
         with self._lock:
             self._last_backend_error = message
 
+    def set_register_control(
+        self,
+        meter_id: int,
+        register_id: int,
+        target_value: float | None,
+        threshold_value: float | None,
+        active: bool,
+    ) -> None:
+        with self._lock:
+            key = (meter_id, register_id)
+            register = self._find_register(key)
+            if register is None:
+                raise KeyError(f"Register {meter_id}:{register_id} not found.")
+
+            updated = replace(register, targetValue=target_value, thresholdValue=threshold_value)
+            self._replace_register(key, updated)
+            self._controls[key] = RegisterControl(
+                meterId=meter_id,
+                registerId=register_id,
+                targetValue=target_value,
+                thresholdValue=threshold_value,
+            )
+            if active:
+                self._active_control_key = key
+
+    def clear_active_control(self) -> None:
+        with self._lock:
+            self._active_control_key = None
+
+    def set_motor_state(self, state_name: str, direction: str, message: str) -> None:
+        with self._lock:
+            self._motor_state = state_name
+            self._motor_direction = direction
+            self._motor_message = message
+
+    def get_active_control_context(self) -> ActiveControlContext | None:
+        with self._lock:
+            if self._active_control_key is None:
+                return None
+            control = self._controls.get(self._active_control_key)
+            state = self._register_states.get(self._active_control_key)
+            if control is None or state is None:
+                return None
+            return ActiveControlContext(
+                meter_id=control.meterId,
+                register_id=control.registerId,
+                register_name=state.register.name,
+                current_value=state.value,
+                target_value=control.targetValue,
+                threshold_value=control.thresholdValue,
+            )
+
     def snapshot(self) -> dict:
         with self._lock:
             rows: list[UiRow] = []
@@ -106,6 +180,7 @@ class ApplicationState:
                 error = self._meter_errors.get(meter.id)
                 for register in self._registers_by_meter.get(meter.id, ()):
                     state = self._register_states.get((meter.id, register.id))
+                    key = (meter.id, register.id)
                     rows.append(
                         UiRow(
                             meter_id=meter.id,
@@ -119,6 +194,9 @@ class ApplicationState:
                             address=register.address,
                             data_type=register.dataType,
                             value=state.value if state else None,
+                            target_value=register.targetValue,
+                            threshold_value=register.thresholdValue,
+                            control_active=key == self._active_control_key,
                             unit=register.unit,
                             updated_at=state.lastUpdate if state else None,
                         )
@@ -131,7 +209,30 @@ class ApplicationState:
                 "backend_error": self._last_backend_error,
                 "meter_count": len(self._meters),
                 "register_count": len(rows),
+                "active_control_key": self._active_control_key,
+                "motor_state": self._motor_state,
+                "motor_direction": self._motor_direction,
+                "motor_message": self._motor_message,
             }
+
+    def _find_register(self, key: tuple[int, int]) -> RegisterDto | None:
+        meter_id, register_id = key
+        for register in self._registers_by_meter.get(meter_id, ()):
+            if register.id == register_id:
+                return register
+        return None
+
+    def _replace_register(self, key: tuple[int, int], updated: RegisterDto) -> None:
+        meter_id, register_id = key
+        registers = list(self._registers_by_meter.get(meter_id, ()))
+        for index, register in enumerate(registers):
+            if register.id == register_id:
+                registers[index] = updated
+                self._registers_by_meter[meter_id] = tuple(registers)
+                break
+        state = self._register_states.get(key)
+        if state is not None:
+            state.register = updated
 
 
 def _sort_registers(registers: list[RegisterDto]) -> list[RegisterDto]:

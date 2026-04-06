@@ -1,1 +1,2 @@
+# Optional dependency. The app can use Linux/POSIX serial ports without pip.
 pyserial>=3.5

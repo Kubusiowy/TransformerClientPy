@@ -6,7 +6,9 @@ from datetime import datetime
 from tkinter import messagebox, ttk
 
 from transformer_client.backend import BackendError, UnauthorizedError
+from transformer_client.control import MotorControlError
 from transformer_client.controller import LiveClientController
+from transformer_client.state import UiRow
 
 
 class LiveClientApp:
@@ -25,10 +27,19 @@ class LiveClientApp:
         self.backend_error_var = tk.StringVar(value="")
         self.transformer_var = tk.StringVar(value="-")
         self.summary_var = tk.StringVar(value="Meters: 0 | Registers: 0")
+        self.motor_status_var = tk.StringVar(value="Motor: IDLE | STOPPED")
+        self.motor_message_var = tk.StringVar(value="Brak aktywnego rejestru.")
+        self.selected_register_var = tk.StringVar(value="Brak zaznaczenia")
+        self.current_value_var = tk.StringVar(value="-")
+        self.control_target_var = tk.StringVar(value="")
+        self.control_threshold_var = tk.StringVar(value="")
+        self.activate_control_var = tk.BooleanVar(value=False)
 
         self._tree: ttk.Treeview | None = None
         self._login_button: ttk.Button | None = None
         self._main_frame: ttk.Frame | None = None
+        self._rows_by_key: dict[str, UiRow] = {}
+        self._selected_key: str | None = None
 
         self._build_login_view()
 
@@ -77,7 +88,7 @@ class LiveClientApp:
         frame = ttk.Frame(self.root, padding=16)
         frame.pack(fill="both", expand=True)
         frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(2, weight=1)
+        frame.rowconfigure(4, weight=1)
         self._main_frame = frame
 
         top_bar = ttk.Frame(frame)
@@ -92,15 +103,44 @@ class LiveClientApp:
         ttk.Button(top_bar, text="Refresh config", command=self._refresh_config_async).grid(row=0, column=1, padx=6)
         ttk.Button(top_bar, text="Wyloguj", command=self._logout).grid(row=0, column=2)
 
-        ttk.Label(frame, textvariable=self.summary_var).grid(row=1, column=0, sticky="w", pady=(0, 8))
+        ttk.Label(frame, textvariable=self.summary_var).grid(row=1, column=0, sticky="w", pady=(0, 4))
         ttk.Label(frame, textvariable=self.backend_error_var, foreground="#b42318").grid(
             row=1,
             column=0,
             sticky="e",
-            pady=(0, 8),
+            pady=(0, 4),
+        )
+        ttk.Label(frame, textvariable=self.motor_status_var).grid(row=2, column=0, sticky="w", pady=(0, 4))
+        ttk.Label(frame, textvariable=self.motor_message_var, foreground="#444").grid(
+            row=2,
+            column=0,
+            sticky="e",
+            pady=(0, 4),
         )
 
-        columns = ("meter", "port", "status", "register", "value", "unit", "updated", "address", "type")
+        control_frame = ttk.LabelFrame(frame, text="Sterowanie", padding=12)
+        control_frame.grid(row=3, column=0, sticky="ew", pady=(0, 12))
+        control_frame.columnconfigure(1, weight=1)
+        control_frame.columnconfigure(3, weight=1)
+
+        ttk.Label(control_frame, text="Wybrany rejestr").grid(row=0, column=0, sticky="w", pady=4)
+        ttk.Label(control_frame, textvariable=self.selected_register_var).grid(row=0, column=1, sticky="w", pady=4)
+        ttk.Label(control_frame, text="Aktualna wartosc").grid(row=0, column=2, sticky="w", pady=4)
+        ttk.Label(control_frame, textvariable=self.current_value_var).grid(row=0, column=3, sticky="w", pady=4)
+
+        ttk.Label(control_frame, text="Target").grid(row=1, column=0, sticky="w", pady=4)
+        ttk.Entry(control_frame, textvariable=self.control_target_var, width=18).grid(row=1, column=1, sticky="w", pady=4)
+        ttk.Label(control_frame, text="Threshold").grid(row=1, column=2, sticky="w", pady=4)
+        ttk.Entry(control_frame, textvariable=self.control_threshold_var, width=18).grid(row=1, column=3, sticky="w", pady=4)
+        ttk.Checkbutton(
+            control_frame,
+            text="Aktywuj sterowanie dla tego rejestru",
+            variable=self.activate_control_var,
+        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=4)
+        ttk.Button(control_frame, text="Apply", command=self._apply_control).grid(row=2, column=2, sticky="e", padx=6)
+        ttk.Button(control_frame, text="Stop control", command=self._clear_active_control).grid(row=2, column=3, sticky="w")
+
+        columns = ("meter", "port", "status", "register", "value", "target", "threshold", "active", "unit", "updated", "address", "type")
         tree = ttk.Treeview(frame, columns=columns, show="headings")
         headings = {
             "meter": "Meter",
@@ -108,6 +148,9 @@ class LiveClientApp:
             "status": "Status",
             "register": "Register",
             "value": "Value",
+            "target": "Target",
+            "threshold": "Threshold",
+            "active": "Control",
             "unit": "Unit",
             "updated": "Last update",
             "address": "Address",
@@ -119,6 +162,9 @@ class LiveClientApp:
             "status": 110,
             "register": 160,
             "value": 100,
+            "target": 100,
+            "threshold": 100,
+            "active": 90,
             "unit": 70,
             "updated": 170,
             "address": 90,
@@ -130,8 +176,9 @@ class LiveClientApp:
 
         scrollbar = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
         tree.configure(yscrollcommand=scrollbar.set)
-        tree.grid(row=2, column=0, sticky="nsew")
-        scrollbar.grid(row=2, column=1, sticky="ns")
+        tree.bind("<<TreeviewSelect>>", self._on_tree_select)
+        tree.grid(row=4, column=0, sticky="nsew")
+        scrollbar.grid(row=4, column=1, sticky="ns")
         self._tree = tree
 
         self._schedule_ui_refresh()
@@ -192,24 +239,88 @@ class LiveClientApp:
             f"Meters: {snapshot['meter_count']} | Registers: {snapshot['register_count']}"
         )
         self.backend_error_var.set(snapshot["backend_error"] or "")
+        self.motor_status_var.set(f"Motor: {snapshot['motor_state']} | {snapshot['motor_direction']}")
+        self.motor_message_var.set(snapshot["motor_message"])
 
+        self._rows_by_key = {}
         self._tree.delete(*self._tree.get_children())
         for row in snapshot["rows"]:
+            item_id = f"{row.meter_id}:{row.register_id}"
+            self._rows_by_key[item_id] = row
             self._tree.insert(
                 "",
                 "end",
+                iid=item_id,
                 values=(
                     row.meter_name,
                     row.serial_port,
                     row.status,
                     row.register_name,
                     format_value(row.value),
+                    format_value(row.target_value),
+                    format_value(row.threshold_value),
+                    "ACTIVE" if row.control_active else "-",
                     row.unit or "",
                     format_timestamp(row.updated_at),
                     row.address,
                     row.data_type,
                 ),
             )
+        if self._selected_key and self._selected_key in self._rows_by_key:
+            self._tree.selection_set(self._selected_key)
+            self._sync_selected_row(self._rows_by_key[self._selected_key])
+
+    def _on_tree_select(self, _event) -> None:
+        if self._tree is None:
+            return
+        selection = self._tree.selection()
+        if not selection:
+            return
+        self._selected_key = selection[0]
+        row = self._rows_by_key.get(self._selected_key)
+        if row is not None:
+            self._sync_selected_row(row)
+
+    def _sync_selected_row(self, row: UiRow) -> None:
+        self.selected_register_var.set(f"{row.meter_name} / {row.register_name} ({row.register_id})")
+        self.current_value_var.set(format_value(row.value))
+        self.control_target_var.set("" if row.target_value is None else str(row.target_value))
+        self.control_threshold_var.set("" if row.threshold_value is None else str(row.threshold_value))
+        self.activate_control_var.set(row.control_active)
+
+    def _apply_control(self) -> None:
+        row = self._require_selected_row()
+        if row is None:
+            return
+        try:
+            target = parse_optional_float(self.control_target_var.get())
+            threshold = parse_optional_float(self.control_threshold_var.get())
+            self.controller.set_register_control(
+                row.meter_id,
+                row.register_id,
+                target,
+                threshold,
+                self.activate_control_var.get(),
+            )
+        except (ValueError, MotorControlError, KeyError) as exc:
+            messagebox.showerror("Sterowanie", str(exc))
+            return
+        self._refresh_ui()
+
+    def _clear_active_control(self) -> None:
+        self.controller.clear_active_register_control()
+        self.activate_control_var.set(False)
+        self._refresh_ui()
+
+    def _require_selected_row(self) -> UiRow | None:
+        if self._selected_key is None:
+            messagebox.showerror("Sterowanie", "Najpierw wybierz rejestr z tabeli.")
+            return None
+        row = self._rows_by_key.get(self._selected_key)
+        if row is None:
+            messagebox.showerror("Sterowanie", "Wybrany rejestr nie jest juz dostepny.")
+            return None
+        return row
 
     def _refresh_config_async(self) -> None:
         self.backend_error_var.set("Refreshing configuration...")
@@ -243,3 +354,10 @@ def format_timestamp(value: datetime | None) -> str:
     if value is None:
         return "-"
     return value.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def parse_optional_float(value: str) -> float | None:
+    stripped = value.strip()
+    if not stripped:
+        return None
+    return float(stripped)

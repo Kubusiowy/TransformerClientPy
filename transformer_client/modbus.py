@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import os
+import select
 import struct
+import sys
+import termios
 import time
 from dataclasses import dataclass
 
@@ -53,19 +57,29 @@ class SerialModbusClient:
         self._serial = None
 
     def open(self) -> None:
-        if serial is None:
-            raise ModbusTransportError("Missing dependency: install pyserial to use Modbus RTU.")
-        try:
-            self._serial = serial.Serial(
-                port=self.port_config.port_name,
-                baudrate=self.port_config.baud_rate,
-                bytesize=self._map_data_bits(self.port_config.data_bits),
-                parity=self._map_parity(self.port_config.parity),
-                stopbits=self._map_stop_bits(self.port_config.stop_bits),
-                timeout=self.timeout_ms / 1000.0,
+        if serial is not None:
+            try:
+                self._serial = serial.Serial(
+                    port=self.port_config.port_name,
+                    baudrate=self.port_config.baud_rate,
+                    bytesize=self._map_data_bits(self.port_config.data_bits),
+                    parity=self._map_parity(self.port_config.parity),
+                    stopbits=self._map_stop_bits(self.port_config.stop_bits),
+                    timeout=self.timeout_ms / 1000.0,
+                )
+                return
+            except SerialException as exc:
+                raise ModbusTransportError(str(exc)) from exc
+
+        if os.name != "posix":
+            raise ModbusTransportError(
+                "Modbus RTU without pyserial is supported only on POSIX/Linux systems."
             )
-        except SerialException as exc:
-            raise ModbusTransportError(str(exc)) from exc
+        self._serial = PosixSerialPort(
+            self.port_config,
+            timeout_seconds=self.timeout_ms / 1000.0,
+        )
+        self._serial.open()
 
     def close(self) -> None:
         if self._serial is not None:
@@ -261,3 +275,132 @@ def crc16(payload: bytes) -> bytes:
             if lsb:
                 crc ^= 0xA001
     return struct.pack("<H", crc & 0xFFFF)
+
+
+class PosixSerialPort:
+    def __init__(self, config: SerialPortConfig, timeout_seconds: float) -> None:
+        self.config = config
+        self.timeout_seconds = timeout_seconds
+        self.fd: int | None = None
+
+    def open(self) -> None:
+        try:
+            fd = os.open(self.config.port_name, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+        except OSError as exc:
+            raise ModbusTransportError(str(exc)) from exc
+
+        try:
+            attrs = termios.tcgetattr(fd)
+            attrs[0] = 0
+            attrs[1] = 0
+            attrs[2] = self._build_cflag()
+            attrs[3] = 0
+            attrs[4] = self._map_baud_rate(self.config.baud_rate)
+            attrs[5] = self._map_baud_rate(self.config.baud_rate)
+            attrs[6][termios.VMIN] = 0
+            attrs[6][termios.VTIME] = 0
+            termios.tcflush(fd, termios.TCIOFLUSH)
+            termios.tcsetattr(fd, termios.TCSANOW, attrs)
+        except Exception as exc:
+            os.close(fd)
+            if isinstance(exc, ModbusTransportError):
+                raise
+            raise ModbusTransportError(str(exc)) from exc
+
+        self.fd = fd
+
+    def close(self) -> None:
+        if self.fd is None:
+            return
+        try:
+            os.close(self.fd)
+        except OSError:
+            pass
+        finally:
+            self.fd = None
+
+    def write(self, data: bytes) -> int:
+        fd = self._require_fd()
+        total = 0
+        view = memoryview(data)
+        while total < len(data):
+            try:
+                _, writable, _ = select.select([], [fd], [], self.timeout_seconds)
+                if not writable:
+                    raise ModbusTransportError("Serial write timeout.")
+                written = os.write(fd, view[total:])
+            except OSError as exc:
+                raise ModbusTransportError(str(exc)) from exc
+            total += written
+        return total
+
+    def flush(self) -> None:
+        fd = self._require_fd()
+        try:
+            termios.tcdrain(fd)
+        except OSError as exc:
+            raise ModbusTransportError(str(exc)) from exc
+
+    def read(self, size: int) -> bytes:
+        fd = self._require_fd()
+        try:
+            readable, _, _ = select.select([fd], [], [], self.timeout_seconds)
+            if not readable:
+                return b""
+            return os.read(fd, size)
+        except OSError as exc:
+            raise ModbusTransportError(str(exc)) from exc
+
+    def reset_input_buffer(self) -> None:
+        fd = self._require_fd()
+        try:
+            termios.tcflush(fd, termios.TCIFLUSH)
+        except OSError as exc:
+            raise ModbusTransportError(str(exc)) from exc
+
+    def reset_output_buffer(self) -> None:
+        fd = self._require_fd()
+        try:
+            termios.tcflush(fd, termios.TCOFLUSH)
+        except OSError as exc:
+            raise ModbusTransportError(str(exc)) from exc
+
+    def _require_fd(self) -> int:
+        if self.fd is None:
+            raise ModbusTransportError("Serial port is not open.")
+        return self.fd
+
+    def _build_cflag(self) -> int:
+        cflag = termios.CLOCAL | termios.CREAD
+        cflag |= self._map_data_bits(self.config.data_bits)
+        if self.config.stop_bits == 2:
+            cflag |= termios.CSTOPB
+        parity = self.config.parity.upper()
+        if parity == "EVEN":
+            cflag |= termios.PARENB
+        elif parity == "ODD":
+            cflag |= termios.PARENB | termios.PARODD
+        return cflag
+
+    @staticmethod
+    def _map_baud_rate(baud_rate: int) -> int:
+        attr_name = f"B{baud_rate}"
+        value = getattr(termios, attr_name, None)
+        if value is None:
+            raise ModbusTransportError(
+                f"Unsupported baud rate {baud_rate} on {sys.platform} without pyserial."
+            )
+        return value
+
+    @staticmethod
+    def _map_data_bits(data_bits: int) -> int:
+        mapping = {
+            5: termios.CS5,
+            6: termios.CS6,
+            7: termios.CS7,
+            8: termios.CS8,
+        }
+        value = mapping.get(data_bits)
+        if value is None:
+            raise ModbusTransportError(f"Unsupported data bits: {data_bits}.")
+        return value

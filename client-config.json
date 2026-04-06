@@ -10,5 +10,9 @@
   "modbusRetries": 2,
   "modbusDiscardDelayMs": 150,
   "interRegisterDelayMs": 0,
-  "rememberCredentials": true
+  "rememberCredentials": true,
+  "controlLoopIntervalMs": 200,
+  "motorForwardCommand": "",
+  "motorReverseCommand": "",
+  "motorStopCommand": ""
 }

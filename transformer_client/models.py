@@ -18,6 +18,10 @@ DEFAULT_CLIENT_CONFIG: dict[str, Any] = {
     "modbusDiscardDelayMs": 150,
     "interRegisterDelayMs": 0,
     "rememberCredentials": True,
+    "controlLoopIntervalMs": 200,
+    "motorForwardCommand": "",
+    "motorReverseCommand": "",
+    "motorStopCommand": "",
 }
 
 
@@ -35,6 +39,10 @@ class ClientConfig:
     modbusDiscardDelayMs: int = DEFAULT_CLIENT_CONFIG["modbusDiscardDelayMs"]
     interRegisterDelayMs: int = DEFAULT_CLIENT_CONFIG["interRegisterDelayMs"]
     rememberCredentials: bool = DEFAULT_CLIENT_CONFIG["rememberCredentials"]
+    controlLoopIntervalMs: int = DEFAULT_CLIENT_CONFIG["controlLoopIntervalMs"]
+    motorForwardCommand: str = DEFAULT_CLIENT_CONFIG["motorForwardCommand"]
+    motorReverseCommand: str = DEFAULT_CLIENT_CONFIG["motorReverseCommand"]
+    motorStopCommand: str = DEFAULT_CLIENT_CONFIG["motorStopCommand"]
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "ClientConfig":
@@ -52,6 +60,10 @@ class ClientConfig:
             modbusDiscardDelayMs=int(merged["modbusDiscardDelayMs"]),
             interRegisterDelayMs=int(merged["interRegisterDelayMs"]),
             rememberCredentials=bool(merged["rememberCredentials"]),
+            controlLoopIntervalMs=int(merged["controlLoopIntervalMs"]),
+            motorForwardCommand=str(merged["motorForwardCommand"]),
+            motorReverseCommand=str(merged["motorReverseCommand"]),
+            motorStopCommand=str(merged["motorStopCommand"]),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -68,6 +80,10 @@ class ClientConfig:
             "modbusDiscardDelayMs": self.modbusDiscardDelayMs,
             "interRegisterDelayMs": self.interRegisterDelayMs,
             "rememberCredentials": self.rememberCredentials,
+            "controlLoopIntervalMs": self.controlLoopIntervalMs,
+            "motorForwardCommand": self.motorForwardCommand,
+            "motorReverseCommand": self.motorReverseCommand,
+            "motorStopCommand": self.motorStopCommand,
         }
 
 
@@ -186,6 +202,18 @@ class RegisterState:
     register: RegisterDto
     value: float | None = None
     lastUpdate: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RegisterControl:
+    meterId: int
+    registerId: int
+    targetValue: float | None
+    thresholdValue: float | None
+
+    @property
+    def key(self) -> tuple[int, int]:
+        return (self.meterId, self.registerId)
 
 
 class MeterStatus:
