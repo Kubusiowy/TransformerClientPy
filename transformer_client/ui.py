@@ -43,6 +43,14 @@ class LiveClientApp:
         self._rows_by_key: dict[str, UiRow] = {}
         self._selected_key: str | None = None
         self._refreshing_tree = False
+        self._programmatic_form_update = False
+        self._target_dirty = False
+        self._threshold_dirty = False
+        self._activate_dirty = False
+
+        self.control_target_var.trace_add("write", self._on_target_change)
+        self.control_threshold_var.trace_add("write", self._on_threshold_change)
+        self.activate_control_var.trace_add("write", self._on_activate_change)
 
         self._build_login_view()
 
@@ -279,12 +287,9 @@ class LiveClientApp:
                 self._tree.delete(item_id)
 
             if self._selected_key and self._selected_key in self._rows_by_key:
-                self._tree.selection_set(self._selected_key)
-                self._sync_selected_row(self._rows_by_key[self._selected_key], preserve_inputs=True)
+                self._update_selected_row_live(self._rows_by_key[self._selected_key])
             elif self._selected_key and self._selected_key not in self._rows_by_key:
-                self._selected_key = None
-                self.selected_register_var.set("Brak zaznaczenia")
-                self.current_value_var.set("-")
+                self._clear_selected_row()
         finally:
             self._refreshing_tree = False
 
@@ -299,15 +304,43 @@ class LiveClientApp:
         self._selected_key = selection[0]
         row = self._rows_by_key.get(self._selected_key)
         if row is not None:
-            self._sync_selected_row(row, preserve_inputs=False)
+            self._load_selected_row(row)
 
-    def _sync_selected_row(self, row: UiRow, preserve_inputs: bool) -> None:
+    def _load_selected_row(self, row: UiRow) -> None:
         self.selected_register_var.set(f"{row.meter_name} / {row.register_name} ({row.register_id})")
         self.current_value_var.set(format_value(row.value))
-        if not preserve_inputs or not self._editing_control_inputs():
+        self._programmatic_form_update = True
+        try:
             self.control_target_var.set("" if row.target_value is None else str(row.target_value))
             self.control_threshold_var.set("" if row.threshold_value is None else str(row.threshold_value))
             self.activate_control_var.set(row.control_active)
+        finally:
+            self._programmatic_form_update = False
+        self._target_dirty = False
+        self._threshold_dirty = False
+        self._activate_dirty = False
+
+    def _update_selected_row_live(self, row: UiRow) -> None:
+        self.selected_register_var.set(f"{row.meter_name} / {row.register_name} ({row.register_id})")
+        self.current_value_var.set(format_value(row.value))
+        if not self._target_dirty:
+            self._programmatic_form_update = True
+            try:
+                self.control_target_var.set("" if row.target_value is None else str(row.target_value))
+            finally:
+                self._programmatic_form_update = False
+        if not self._threshold_dirty:
+            self._programmatic_form_update = True
+            try:
+                self.control_threshold_var.set("" if row.threshold_value is None else str(row.threshold_value))
+            finally:
+                self._programmatic_form_update = False
+        if not self._activate_dirty:
+            self._programmatic_form_update = True
+            try:
+                self.activate_control_var.set(row.control_active)
+            finally:
+                self._programmatic_form_update = False
 
     def _apply_control(self) -> None:
         row = self._require_selected_row()
@@ -326,6 +359,9 @@ class LiveClientApp:
         except (ValueError, MotorControlError, KeyError) as exc:
             messagebox.showerror("Sterowanie", str(exc))
             return
+        self._target_dirty = False
+        self._threshold_dirty = False
+        self._activate_dirty = False
         self._refresh_ui()
 
     def _clear_active_control(self) -> None:
@@ -343,9 +379,32 @@ class LiveClientApp:
             return None
         return row
 
-    def _editing_control_inputs(self) -> bool:
-        focused = self.root.focus_get()
-        return focused in {self._target_entry, self._threshold_entry}
+    def _clear_selected_row(self) -> None:
+        self._selected_key = None
+        self.selected_register_var.set("Brak zaznaczenia")
+        self.current_value_var.set("-")
+        self._programmatic_form_update = True
+        try:
+            self.control_target_var.set("")
+            self.control_threshold_var.set("")
+            self.activate_control_var.set(False)
+        finally:
+            self._programmatic_form_update = False
+        self._target_dirty = False
+        self._threshold_dirty = False
+        self._activate_dirty = False
+
+    def _on_target_change(self, *_args) -> None:
+        if not self._programmatic_form_update:
+            self._target_dirty = True
+
+    def _on_threshold_change(self, *_args) -> None:
+        if not self._programmatic_form_update:
+            self._threshold_dirty = True
+
+    def _on_activate_change(self, *_args) -> None:
+        if not self._programmatic_form_update:
+            self._activate_dirty = True
 
     def _refresh_config_async(self) -> None:
         self.backend_error_var.set("Refreshing configuration...")
