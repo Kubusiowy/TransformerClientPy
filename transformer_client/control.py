@@ -163,9 +163,14 @@ class MotorControlLoop:
         self._last_key: tuple[int, int] | None = None
         self._last_distance: float | None = None
         self._last_progress_monotonic: float | None = None
+        self._last_command_monotonic: float | None = None
         self._last_command_update: datetime | None = None
+        self._last_command_value: float | None = None
+        self._last_command_direction: str | None = None
         self._last_command_distance: float | None = None
+        self._last_step_effect: float | None = None
         self._current_direction: str = "STOPPED"
+        self._reverse_pending_count = 0
         self._runtime_direction_inverted = False
 
     def update_config(self, config: ClientConfig) -> None:
@@ -211,17 +216,23 @@ class MotorControlLoop:
             current_value = context.current_value
             raw_delta = context.target_value - current_value
             raw_distance = abs(raw_delta)
+            effective_threshold = max(threshold, min((self._last_step_effect or 0.0) / 4.0, 5.0))
 
             if self._last_key != key:
                 self._last_key = key
                 self._last_distance = raw_distance
                 self._last_progress_monotonic = time.monotonic()
+                self._last_command_monotonic = None
                 self._last_command_update = None
+                self._last_command_value = None
+                self._last_command_direction = None
                 self._last_command_distance = None
+                self._last_step_effect = None
                 self._current_direction = "STOPPED"
+                self._reverse_pending_count = 0
                 self._runtime_direction_inverted = False
 
-            if raw_distance <= threshold:
+            if raw_distance <= effective_threshold:
                 self._current_direction = "STOPPED"
                 self._reset_progress_tracking(keep_last_key=True)
                 self._set_motor(
@@ -245,6 +256,20 @@ class MotorControlLoop:
                 continue
 
             if (
+                self._last_command_monotonic is not None
+                and (time.monotonic() - self._last_command_monotonic)
+                < (max(self.config.motorSettleMs, 0) / 1000.0)
+            ):
+                self._set_motor(
+                    "WAITING",
+                    "STOPPED",
+                    self._format_motor_message("Czekam na ustabilizowanie po kroku", context),
+                )
+                continue
+
+            desired_direction = "FORWARD" if raw_delta > 0 else "REVERSE"
+
+            if (
                 context.last_update is not None
                 and self._last_command_update is not None
                 and context.last_update <= self._last_command_update
@@ -260,23 +285,74 @@ class MotorControlLoop:
                 context.last_update is not None
                 and self._last_command_update is not None
                 and context.last_update > self._last_command_update
-                and self._last_command_distance is not None
-                and (raw_distance - self._last_command_distance) >= self.config.motorProgressEpsilon
             ):
-                self._runtime_direction_inverted = not self._runtime_direction_inverted
-                self._last_command_update = None
-                self._last_command_distance = None
+                if self._last_command_value is not None:
+                    step_effect = abs(current_value - self._last_command_value)
+                    if step_effect > 0:
+                        self._last_step_effect = step_effect
+                        effective_threshold = max(threshold, min(step_effect / 4.0, 5.0))
+
+                if (
+                    self._last_command_distance is not None
+                    and self._last_command_direction is not None
+                    and desired_direction == self._last_command_direction
+                    and (raw_distance - self._last_command_distance) >= self.config.motorProgressEpsilon
+                ):
+                    self._runtime_direction_inverted = not self._runtime_direction_inverted
+                    self._last_command_monotonic = None
+                    self._last_command_update = None
+                    self._last_command_value = None
+                    self._last_command_direction = None
+                    self._last_command_distance = None
+                    self._reverse_pending_count = 0
+                    self._set_motor(
+                        "HOLDING",
+                        "STOPPED",
+                        self._format_motor_message("Ostatni krok pogorszyl blad, odwrocono mapowanie kierunku", context),
+                    )
+                    continue
+
+                if self._last_command_direction is not None and desired_direction != self._last_command_direction:
+                    self._reverse_pending_count += 1
+                    reverse_threshold = max(
+                        effective_threshold * max(self.config.motorReverseThresholdMultiplier, 1.0),
+                        effective_threshold + self.config.motorProgressEpsilon,
+                    )
+                    self._last_command_update = context.last_update
+                    if raw_distance <= reverse_threshold:
+                        self._set_motor(
+                            "HOLDING",
+                            "STOPPED",
+                            self._format_motor_message("Blisko targetu po przelocie, zatrzymuje", context),
+                        )
+                        continue
+                    if self._reverse_pending_count < max(self.config.motorReverseSamples, 1):
+                        self._set_motor(
+                            "HOLDING",
+                            "STOPPED",
+                            self._format_motor_message("Potwierdzam zmiane kierunku", context),
+                        )
+                        continue
+                else:
+                    self._reverse_pending_count = 0
+
+            if raw_distance <= effective_threshold:
+                self._current_direction = "STOPPED"
+                self._reset_progress_tracking(keep_last_key=True)
                 self._set_motor(
-                    "HOLDING",
+                    "TARGET_REACHED",
                     "STOPPED",
-                    self._format_motor_message("Ostatni krok pogorszyl blad, odwrocono kierunek", context),
+                    self._format_motor_message("Osiagnieto zakres docelowy", context),
                 )
                 continue
 
-            desired_direction = "FORWARD" if raw_delta > 0 else "REVERSE"
             self._current_direction = desired_direction
+            self._last_command_monotonic = time.monotonic()
             self._last_command_update = context.last_update
+            self._last_command_value = current_value
+            self._last_command_direction = desired_direction
             self._last_command_distance = raw_distance
+            self._reverse_pending_count = 0
             self._set_motor(
                 "RUNNING",
                 self._map_direction(desired_direction),
@@ -305,9 +381,14 @@ class MotorControlLoop:
         self._last_key = None if not keep_last_key else self._last_key
         self._last_distance = None
         self._last_progress_monotonic = None
+        self._last_command_monotonic = None
         self._last_command_update = None
+        self._last_command_value = None
+        self._last_command_direction = None
         self._last_command_distance = None
+        self._last_step_effect = None
         self._current_direction = "STOPPED"
+        self._reverse_pending_count = 0
         if not keep_last_key:
             self._runtime_direction_inverted = False
 

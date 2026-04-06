@@ -25,8 +25,8 @@
   "motorM2Pin": null,
   "motorEnableDelaySec": 0.002,
   "motorAverageWindow": 8,
-  "motorReverseThresholdMultiplier": 4.0,
-  "motorReverseSamples": 5,
+  "motorReverseThresholdMultiplier": 1.5,
+  "motorReverseSamples": 2,
   "motorForwardCommand": "sh ./scripts/drv8825_forward.sh",
   "motorReverseCommand": "sh ./scripts/drv8825_reverse.sh",
   "motorStopCommand": "sh ./scripts/drv8825_stop.sh"
