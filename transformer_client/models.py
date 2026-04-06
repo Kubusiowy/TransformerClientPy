@@ -24,7 +24,7 @@ DEFAULT_CLIENT_CONFIG: dict[str, Any] = {
     "metricsPublishMs": 500,
     "motorBurstSteps": 1,
     "motorStepDelaySec": 0.08,
-    "motorSettleMs": 1500,
+    "motorSettleMs": 3000,
     "motorDirectionInverted": True,
     "motorMicrostepMode": "FULL",
     "motorM0Pin": None,
