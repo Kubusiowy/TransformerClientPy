@@ -7,7 +7,9 @@ LOG_FILE="$SCRIPT_DIR/.drv8825_step.log"
 EN_PIN=24
 STEP_PIN=23
 DIR_PIN=22
-STEP_DELAY_SEC=0.002
+STEP_DELAY_SEC=0.006
+RAMP_STEP_DELAYS="0.020 0.016 0.012 0.009 0.007 0.006"
+RAMP_STEPS_PER_STAGE=25
 
 ensure_pinctrl() {
   if ! command -v pinctrl >/dev/null 2>&1; then

@@ -35,6 +35,7 @@ class ActiveControlContext:
     current_value: float | None
     target_value: float | None
     threshold_value: float | None
+    last_update: datetime | None
 
 
 class ApplicationState:
@@ -169,6 +170,7 @@ class ApplicationState:
                 current_value=state.value,
                 target_value=control.targetValue,
                 threshold_value=control.thresholdValue,
+                last_update=state.lastUpdate,
             )
 
     def snapshot(self) -> dict:

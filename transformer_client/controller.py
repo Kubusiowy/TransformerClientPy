@@ -20,7 +20,7 @@ class LiveClientController:
         self.state = ApplicationState()
         self.control_store = RegisterControlStore(workdir)
         self.polling = PollingSupervisor(self.state)
-        self.motor_control = MotorControlLoop(self.state, self.config)
+        self.motor_control = MotorControlLoop(self.state, self.config, self.clear_active_register_control)
         self._refresh_lock = threading.Lock()
         self._refresh_thread: threading.Thread | None = None
         self._stop_event = threading.Event()

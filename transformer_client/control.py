@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 import subprocess
 import threading
+import time
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 from transformer_client.models import ClientConfig, RegisterControl
 from transformer_client.state import ApplicationState
@@ -126,12 +129,21 @@ class CommandMotorDriver:
 
 
 class MotorControlLoop:
-    def __init__(self, state: ApplicationState, config: ClientConfig) -> None:
+    def __init__(
+        self,
+        state: ApplicationState,
+        config: ClientConfig,
+        clear_active_callback: Callable[[], None],
+    ) -> None:
         self.state = state
         self.config = config
         self.driver = CommandMotorDriver(config)
+        self.clear_active_callback = clear_active_callback
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._last_key: tuple[int, int] | None = None
+        self._last_distance: float | None = None
+        self._last_progress_monotonic: float | None = None
 
     def update_config(self, config: ClientConfig) -> None:
         self.config = config
@@ -159,24 +171,48 @@ class MotorControlLoop:
             interval = max(self.config.controlLoopIntervalMs, 100) / 1000.0
             context = self.state.get_active_control_context()
             if context is None:
+                self._reset_progress_tracking()
                 self._set_motor("IDLE", "STOPPED", "Brak aktywnego rejestru.")
                 continue
             if context.current_value is None:
+                self._reset_progress_tracking()
                 self._set_motor("WAITING", "STOPPED", "Brak aktualnej wartosci rejestru.")
                 continue
             if context.target_value is None:
+                self._reset_progress_tracking()
                 self._set_motor("ERROR", "STOPPED", "Brak targetValue dla aktywnego rejestru.")
                 continue
 
+            key = (context.meter_id, context.register_id)
             threshold = abs(context.threshold_value) if context.threshold_value is not None else 0.0
             delta = context.target_value - context.current_value
+            distance = abs(delta)
+
+            if self._last_key != key:
+                self._last_key = key
+                self._last_distance = distance
+                self._last_progress_monotonic = time.monotonic()
+
             if abs(delta) <= threshold:
+                self._reset_progress_tracking()
                 self._set_motor(
                     "TARGET_REACHED",
                     "STOPPED",
                     f"Osiagnieto target dla {context.register_name}: {context.current_value:.4f}",
                 )
-            elif delta > 0:
+                continue
+
+            if self._has_progress(distance):
+                self._last_distance = distance
+                self._last_progress_monotonic = time.monotonic()
+
+            if self._measurement_stale(context.last_update) or self._progress_timeout_exceeded():
+                self._safety_stop(
+                    f"Safety stop dla {context.register_name}: brak postepu albo brak swiezego pomiaru."
+                )
+                continue
+
+            if delta > 0:
                 self._set_motor(
                     "RUNNING",
                     "FORWARD",
@@ -188,6 +224,38 @@ class MotorControlLoop:
                     "REVERSE",
                     f"Silnik do tylu dla {context.register_name}: {context.current_value:.4f} -> {context.target_value:.4f}",
                 )
+
+    def _has_progress(self, distance: float) -> bool:
+        if self._last_distance is None:
+            return True
+        return (self._last_distance - distance) >= self.config.motorProgressEpsilon
+
+    def _progress_timeout_exceeded(self) -> bool:
+        if self._last_progress_monotonic is None:
+            return False
+        timeout_seconds = max(self.config.motorNoProgressTimeoutMs, 250) / 1000.0
+        return (time.monotonic() - self._last_progress_monotonic) >= timeout_seconds
+
+    def _measurement_stale(self, last_update: datetime | None) -> bool:
+        if last_update is None:
+            return True
+        age_seconds = (datetime.now() - last_update).total_seconds()
+        timeout_seconds = max(self.config.motorNoProgressTimeoutMs, 250) / 1000.0
+        return age_seconds >= timeout_seconds
+
+    def _reset_progress_tracking(self) -> None:
+        self._last_key = None
+        self._last_distance = None
+        self._last_progress_monotonic = None
+
+    def _safety_stop(self, message: str) -> None:
+        self._reset_progress_tracking()
+        try:
+            self.driver.stop()
+        except Exception:
+            pass
+        self.clear_active_callback()
+        self.state.set_motor_state("SAFETY_STOP", "STOPPED", message)
 
     def _set_motor(self, state_name: str, direction: str, message: str) -> None:
         try:

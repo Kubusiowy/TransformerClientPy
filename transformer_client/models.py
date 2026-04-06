@@ -19,6 +19,8 @@ DEFAULT_CLIENT_CONFIG: dict[str, Any] = {
     "interRegisterDelayMs": 0,
     "rememberCredentials": True,
     "controlLoopIntervalMs": 200,
+    "motorNoProgressTimeoutMs": 1500,
+    "motorProgressEpsilon": 0.05,
     "motorForwardCommand": "",
     "motorReverseCommand": "",
     "motorStopCommand": "",
@@ -40,6 +42,8 @@ class ClientConfig:
     interRegisterDelayMs: int = DEFAULT_CLIENT_CONFIG["interRegisterDelayMs"]
     rememberCredentials: bool = DEFAULT_CLIENT_CONFIG["rememberCredentials"]
     controlLoopIntervalMs: int = DEFAULT_CLIENT_CONFIG["controlLoopIntervalMs"]
+    motorNoProgressTimeoutMs: int = DEFAULT_CLIENT_CONFIG["motorNoProgressTimeoutMs"]
+    motorProgressEpsilon: float = DEFAULT_CLIENT_CONFIG["motorProgressEpsilon"]
     motorForwardCommand: str = DEFAULT_CLIENT_CONFIG["motorForwardCommand"]
     motorReverseCommand: str = DEFAULT_CLIENT_CONFIG["motorReverseCommand"]
     motorStopCommand: str = DEFAULT_CLIENT_CONFIG["motorStopCommand"]
@@ -61,6 +65,8 @@ class ClientConfig:
             interRegisterDelayMs=int(merged["interRegisterDelayMs"]),
             rememberCredentials=bool(merged["rememberCredentials"]),
             controlLoopIntervalMs=int(merged["controlLoopIntervalMs"]),
+            motorNoProgressTimeoutMs=int(merged["motorNoProgressTimeoutMs"]),
+            motorProgressEpsilon=float(merged["motorProgressEpsilon"]),
             motorForwardCommand=str(merged["motorForwardCommand"]),
             motorReverseCommand=str(merged["motorReverseCommand"]),
             motorStopCommand=str(merged["motorStopCommand"]),
@@ -81,6 +87,8 @@ class ClientConfig:
             "interRegisterDelayMs": self.interRegisterDelayMs,
             "rememberCredentials": self.rememberCredentials,
             "controlLoopIntervalMs": self.controlLoopIntervalMs,
+            "motorNoProgressTimeoutMs": self.motorNoProgressTimeoutMs,
+            "motorProgressEpsilon": self.motorProgressEpsilon,
             "motorForwardCommand": self.motorForwardCommand,
             "motorReverseCommand": self.motorReverseCommand,
             "motorStopCommand": self.motorStopCommand,
