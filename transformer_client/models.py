@@ -21,6 +21,7 @@ DEFAULT_CLIENT_CONFIG: dict[str, Any] = {
     "controlLoopIntervalMs": 200,
     "motorNoProgressTimeoutMs": 1500,
     "motorProgressEpsilon": 0.05,
+    "metricsPublishMs": 500,
     "motorForwardCommand": "",
     "motorReverseCommand": "",
     "motorStopCommand": "",
@@ -44,6 +45,7 @@ class ClientConfig:
     controlLoopIntervalMs: int = DEFAULT_CLIENT_CONFIG["controlLoopIntervalMs"]
     motorNoProgressTimeoutMs: int = DEFAULT_CLIENT_CONFIG["motorNoProgressTimeoutMs"]
     motorProgressEpsilon: float = DEFAULT_CLIENT_CONFIG["motorProgressEpsilon"]
+    metricsPublishMs: int = DEFAULT_CLIENT_CONFIG["metricsPublishMs"]
     motorForwardCommand: str = DEFAULT_CLIENT_CONFIG["motorForwardCommand"]
     motorReverseCommand: str = DEFAULT_CLIENT_CONFIG["motorReverseCommand"]
     motorStopCommand: str = DEFAULT_CLIENT_CONFIG["motorStopCommand"]
@@ -67,6 +69,7 @@ class ClientConfig:
             controlLoopIntervalMs=int(merged["controlLoopIntervalMs"]),
             motorNoProgressTimeoutMs=int(merged["motorNoProgressTimeoutMs"]),
             motorProgressEpsilon=float(merged["motorProgressEpsilon"]),
+            metricsPublishMs=int(merged["metricsPublishMs"]),
             motorForwardCommand=str(merged["motorForwardCommand"]),
             motorReverseCommand=str(merged["motorReverseCommand"]),
             motorStopCommand=str(merged["motorStopCommand"]),
@@ -89,6 +92,7 @@ class ClientConfig:
             "controlLoopIntervalMs": self.controlLoopIntervalMs,
             "motorNoProgressTimeoutMs": self.motorNoProgressTimeoutMs,
             "motorProgressEpsilon": self.motorProgressEpsilon,
+            "metricsPublishMs": self.metricsPublishMs,
             "motorForwardCommand": self.motorForwardCommand,
             "motorReverseCommand": self.motorReverseCommand,
             "motorStopCommand": self.motorStopCommand,

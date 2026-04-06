@@ -14,6 +14,7 @@
   "controlLoopIntervalMs": 200,
   "motorNoProgressTimeoutMs": 1500,
   "motorProgressEpsilon": 0.05,
+  "metricsPublishMs": 500,
   "motorForwardCommand": "sh ./scripts/drv8825_forward.sh",
   "motorReverseCommand": "sh ./scripts/drv8825_reverse.sh",
   "motorStopCommand": "sh ./scripts/drv8825_stop.sh"

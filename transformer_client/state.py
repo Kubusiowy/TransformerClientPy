@@ -54,6 +54,8 @@ class ApplicationState:
         self._motor_state: str = "IDLE"
         self._motor_direction: str = "STOPPED"
         self._motor_message: str = "Brak aktywnego rejestru."
+        self._metrics_state: str = "DISCONNECTED"
+        self._metrics_error: str | None = None
 
     def apply_configuration(
         self,
@@ -155,6 +157,11 @@ class ApplicationState:
             self._motor_direction = direction
             self._motor_message = message
 
+    def set_metrics_state(self, state_name: str, error_message: str | None) -> None:
+        with self._lock:
+            self._metrics_state = state_name
+            self._metrics_error = error_message
+
     def get_active_control_context(self) -> ActiveControlContext | None:
         with self._lock:
             if self._active_control_key is None:
@@ -215,6 +222,39 @@ class ApplicationState:
                 "motor_state": self._motor_state,
                 "motor_direction": self._motor_direction,
                 "motor_message": self._motor_message,
+                "metrics_state": self._metrics_state,
+                "metrics_error": self._metrics_error,
+            }
+
+    def metrics_payload(self, transformer_id: str) -> dict:
+        with self._lock:
+            metrics: list[dict] = []
+            for meter in sorted(self._meters.values(), key=lambda meter: meter.id):
+                meter_status = self._meter_statuses.get(meter.id, MeterStatus.CONNECTING)
+                for register in self._registers_by_meter.get(meter.id, ()):
+                    state = self._register_states.get((meter.id, register.id))
+                    if state is None or state.value is None or state.lastUpdate is None:
+                        continue
+                    metrics.append(
+                        {
+                            "meterId": meter.id,
+                            "meterName": meter.name,
+                            "meterStatus": meter_status,
+                            "registerId": register.id,
+                            "registerName": register.name,
+                            "registerType": register.registerType,
+                            "address": register.address,
+                            "dataType": register.dataType,
+                            "unit": register.unit,
+                            "value": state.value,
+                            "lastUpdate": state.lastUpdate.isoformat(),
+                        }
+                    )
+            return {
+                "type": "transformer_metrics",
+                "transformerId": transformer_id,
+                "sentAt": datetime.now().isoformat(),
+                "metrics": metrics,
             }
 
     def _find_register(self, key: tuple[int, int]) -> RegisterDto | None:

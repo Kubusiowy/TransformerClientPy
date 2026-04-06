@@ -7,6 +7,7 @@ from pathlib import Path
 from transformer_client.backend import BackendClient, BackendError
 from transformer_client.config import load_client_config, save_client_config
 from transformer_client.control import MotorControlError, MotorControlLoop, RegisterControlStore
+from transformer_client.metrics_ws import MetricsConnectionSettings, MetricsPublisher, build_metrics_ws_url
 from transformer_client.models import AuthResponse, TransformerDto
 from transformer_client.polling import PollingSupervisor
 from transformer_client.state import ApplicationState
@@ -21,11 +22,13 @@ class LiveClientController:
         self.control_store = RegisterControlStore(workdir)
         self.polling = PollingSupervisor(self.state)
         self.motor_control = MotorControlLoop(self.state, self.config, self.clear_active_register_control)
+        self.metrics_publisher = MetricsPublisher(self.state, self._get_config_copy, self._current_metrics_settings)
         self._refresh_lock = threading.Lock()
         self._refresh_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._logged_in = False
         self.motor_control.start()
+        self.metrics_publisher.start()
 
     @property
     def logged_in(self) -> bool:
@@ -112,6 +115,7 @@ class LiveClientController:
             self._refresh_thread.join(timeout=1.0)
         self.polling.shutdown()
         self.motor_control.stop()
+        self.metrics_publisher.stop()
 
     def _choose_transformer(self, transformers: list[TransformerDto]) -> TransformerDto:
         if self.config.transformerId:
@@ -149,4 +153,19 @@ class LiveClientController:
             register,
             targetValue=control.targetValue,
             thresholdValue=control.thresholdValue,
+        )
+
+    def _get_config_copy(self):
+        return replace(self.config)
+
+    def _current_metrics_settings(self) -> MetricsConnectionSettings | None:
+        access_token = self.backend.tokens.access_token
+        transformer_id = self.config.transformerId
+        if not self._logged_in or not access_token or not transformer_id:
+            return None
+        ws_url = build_metrics_ws_url(self.config.backendUrl, transformer_id, access_token)
+        return MetricsConnectionSettings(
+            ws_url=ws_url,
+            transformer_id=transformer_id,
+            access_token=access_token,
         )

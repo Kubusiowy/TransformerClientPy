@@ -8,6 +8,7 @@ Desktop client in Python for:
 - reading Modbus RTU locally and showing live values in UI
 - local target/threshold control for one active register at a time
 - motor driving through system commands configured in `client-config.json`
+- websocket metrics publishing to `/ws/transformers/{transformerId}/metrics?token=<accessToken>`
 
 ## Run
 

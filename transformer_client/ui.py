@@ -29,6 +29,7 @@ class LiveClientApp:
         self.summary_var = tk.StringVar(value="Meters: 0 | Registers: 0")
         self.motor_status_var = tk.StringVar(value="Motor: IDLE | STOPPED")
         self.motor_message_var = tk.StringVar(value="Brak aktywnego rejestru.")
+        self.metrics_status_var = tk.StringVar(value="Metrics WS: DISCONNECTED")
         self.selected_register_var = tk.StringVar(value="Brak zaznaczenia")
         self.current_value_var = tk.StringVar(value="-")
         self.control_target_var = tk.StringVar(value="")
@@ -99,7 +100,7 @@ class LiveClientApp:
         frame = ttk.Frame(self.root, padding=16)
         frame.pack(fill="both", expand=True)
         frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(4, weight=1)
+        frame.rowconfigure(5, weight=1)
         self._main_frame = frame
 
         top_bar = ttk.Frame(frame)
@@ -128,9 +129,10 @@ class LiveClientApp:
             sticky="e",
             pady=(0, 4),
         )
+        ttk.Label(frame, textvariable=self.metrics_status_var).grid(row=3, column=0, sticky="w", pady=(0, 4))
 
         control_frame = ttk.LabelFrame(frame, text="Sterowanie", padding=12)
-        control_frame.grid(row=3, column=0, sticky="ew", pady=(0, 12))
+        control_frame.grid(row=4, column=0, sticky="ew", pady=(0, 12))
         control_frame.columnconfigure(1, weight=1)
         control_frame.columnconfigure(3, weight=1)
 
@@ -190,8 +192,8 @@ class LiveClientApp:
         scrollbar = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
         tree.configure(yscrollcommand=scrollbar.set)
         tree.bind("<<TreeviewSelect>>", self._on_tree_select)
-        tree.grid(row=4, column=0, sticky="nsew")
-        scrollbar.grid(row=4, column=1, sticky="ns")
+        tree.grid(row=5, column=0, sticky="nsew")
+        scrollbar.grid(row=5, column=1, sticky="ns")
         self._tree = tree
 
         self._schedule_ui_refresh()
@@ -254,6 +256,11 @@ class LiveClientApp:
         self.backend_error_var.set(snapshot["backend_error"] or "")
         self.motor_status_var.set(f"Motor: {snapshot['motor_state']} | {snapshot['motor_direction']}")
         self.motor_message_var.set(snapshot["motor_message"])
+        metrics_state = snapshot["metrics_state"]
+        metrics_error = snapshot["metrics_error"]
+        self.metrics_status_var.set(
+            f"Metrics WS: {metrics_state}" if not metrics_error else f"Metrics WS: {metrics_state} | {metrics_error}"
+        )
 
         self._rows_by_key = {}
         self._refreshing_tree = True
