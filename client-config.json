@@ -19,6 +19,11 @@
   "motorStepDelaySec": 0.015,
   "motorSettleMs": 1200,
   "motorDirectionInverted": true,
+  "motorMicrostepMode": "FULL",
+  "motorM0Pin": null,
+  "motorM1Pin": null,
+  "motorM2Pin": null,
+  "motorEnableDelaySec": 0.002,
   "motorForwardCommand": "sh ./scripts/drv8825_forward.sh",
   "motorReverseCommand": "sh ./scripts/drv8825_reverse.sh",
   "motorStopCommand": "sh ./scripts/drv8825_stop.sh"

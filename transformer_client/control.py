@@ -124,6 +124,11 @@ class CommandMotorDriver:
                 **os.environ,
                 "MOTOR_BURST_STEPS": str(self.config.motorBurstSteps),
                 "MOTOR_STEP_DELAY_SEC": str(self.config.motorStepDelaySec),
+                "MOTOR_ENABLE_DELAY_SEC": str(self.config.motorEnableDelaySec),
+                "MOTOR_MICROSTEP_MODE": str(self.config.motorMicrostepMode),
+                "MOTOR_M0_PIN": "" if self.config.motorM0Pin is None else str(self.config.motorM0Pin),
+                "MOTOR_M1_PIN": "" if self.config.motorM1Pin is None else str(self.config.motorM1Pin),
+                "MOTOR_M2_PIN": "" if self.config.motorM2Pin is None else str(self.config.motorM2Pin),
             },
         )
         if result.returncode != 0:

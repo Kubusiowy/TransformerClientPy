@@ -26,6 +26,11 @@ DEFAULT_CLIENT_CONFIG: dict[str, Any] = {
     "motorStepDelaySec": 0.015,
     "motorSettleMs": 1200,
     "motorDirectionInverted": True,
+    "motorMicrostepMode": "FULL",
+    "motorM0Pin": None,
+    "motorM1Pin": None,
+    "motorM2Pin": None,
+    "motorEnableDelaySec": 0.002,
     "motorForwardCommand": "",
     "motorReverseCommand": "",
     "motorStopCommand": "",
@@ -54,6 +59,11 @@ class ClientConfig:
     motorStepDelaySec: float = DEFAULT_CLIENT_CONFIG["motorStepDelaySec"]
     motorSettleMs: int = DEFAULT_CLIENT_CONFIG["motorSettleMs"]
     motorDirectionInverted: bool = DEFAULT_CLIENT_CONFIG["motorDirectionInverted"]
+    motorMicrostepMode: str = DEFAULT_CLIENT_CONFIG["motorMicrostepMode"]
+    motorM0Pin: int | None = DEFAULT_CLIENT_CONFIG["motorM0Pin"]
+    motorM1Pin: int | None = DEFAULT_CLIENT_CONFIG["motorM1Pin"]
+    motorM2Pin: int | None = DEFAULT_CLIENT_CONFIG["motorM2Pin"]
+    motorEnableDelaySec: float = DEFAULT_CLIENT_CONFIG["motorEnableDelaySec"]
     motorForwardCommand: str = DEFAULT_CLIENT_CONFIG["motorForwardCommand"]
     motorReverseCommand: str = DEFAULT_CLIENT_CONFIG["motorReverseCommand"]
     motorStopCommand: str = DEFAULT_CLIENT_CONFIG["motorStopCommand"]
@@ -82,6 +92,11 @@ class ClientConfig:
             motorStepDelaySec=float(merged["motorStepDelaySec"]),
             motorSettleMs=int(merged["motorSettleMs"]),
             motorDirectionInverted=bool(merged["motorDirectionInverted"]),
+            motorMicrostepMode=str(merged["motorMicrostepMode"]),
+            motorM0Pin=int(merged["motorM0Pin"]) if merged.get("motorM0Pin") is not None else None,
+            motorM1Pin=int(merged["motorM1Pin"]) if merged.get("motorM1Pin") is not None else None,
+            motorM2Pin=int(merged["motorM2Pin"]) if merged.get("motorM2Pin") is not None else None,
+            motorEnableDelaySec=float(merged["motorEnableDelaySec"]),
             motorForwardCommand=str(merged["motorForwardCommand"]),
             motorReverseCommand=str(merged["motorReverseCommand"]),
             motorStopCommand=str(merged["motorStopCommand"]),
@@ -109,6 +124,11 @@ class ClientConfig:
             "motorStepDelaySec": self.motorStepDelaySec,
             "motorSettleMs": self.motorSettleMs,
             "motorDirectionInverted": self.motorDirectionInverted,
+            "motorMicrostepMode": self.motorMicrostepMode,
+            "motorM0Pin": self.motorM0Pin,
+            "motorM1Pin": self.motorM1Pin,
+            "motorM2Pin": self.motorM2Pin,
+            "motorEnableDelaySec": self.motorEnableDelaySec,
             "motorForwardCommand": self.motorForwardCommand,
             "motorReverseCommand": self.motorReverseCommand,
             "motorStopCommand": self.motorStopCommand,
