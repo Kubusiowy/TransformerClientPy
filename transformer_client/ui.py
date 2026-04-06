@@ -36,10 +36,13 @@ class LiveClientApp:
         self.activate_control_var = tk.BooleanVar(value=False)
 
         self._tree: ttk.Treeview | None = None
+        self._target_entry: ttk.Entry | None = None
+        self._threshold_entry: ttk.Entry | None = None
         self._login_button: ttk.Button | None = None
         self._main_frame: ttk.Frame | None = None
         self._rows_by_key: dict[str, UiRow] = {}
         self._selected_key: str | None = None
+        self._refreshing_tree = False
 
         self._build_login_view()
 
@@ -129,9 +132,11 @@ class LiveClientApp:
         ttk.Label(control_frame, textvariable=self.current_value_var).grid(row=0, column=3, sticky="w", pady=4)
 
         ttk.Label(control_frame, text="Target").grid(row=1, column=0, sticky="w", pady=4)
-        ttk.Entry(control_frame, textvariable=self.control_target_var, width=18).grid(row=1, column=1, sticky="w", pady=4)
+        self._target_entry = ttk.Entry(control_frame, textvariable=self.control_target_var, width=18)
+        self._target_entry.grid(row=1, column=1, sticky="w", pady=4)
         ttk.Label(control_frame, text="Threshold").grid(row=1, column=2, sticky="w", pady=4)
-        ttk.Entry(control_frame, textvariable=self.control_threshold_var, width=18).grid(row=1, column=3, sticky="w", pady=4)
+        self._threshold_entry = ttk.Entry(control_frame, textvariable=self.control_threshold_var, width=18)
+        self._threshold_entry.grid(row=1, column=3, sticky="w", pady=4)
         ttk.Checkbutton(
             control_frame,
             text="Aktywuj sterowanie dla tego rejestru",
@@ -243,15 +248,15 @@ class LiveClientApp:
         self.motor_message_var.set(snapshot["motor_message"])
 
         self._rows_by_key = {}
-        self._tree.delete(*self._tree.get_children())
-        for row in snapshot["rows"]:
-            item_id = f"{row.meter_id}:{row.register_id}"
-            self._rows_by_key[item_id] = row
-            self._tree.insert(
-                "",
-                "end",
-                iid=item_id,
-                values=(
+        self._refreshing_tree = True
+        try:
+            existing_ids = set(self._tree.get_children())
+            next_ids: set[str] = set()
+            for row in snapshot["rows"]:
+                item_id = f"{row.meter_id}:{row.register_id}"
+                next_ids.add(item_id)
+                self._rows_by_key[item_id] = row
+                values = (
                     row.meter_name,
                     row.serial_port,
                     row.status,
@@ -264,13 +269,28 @@ class LiveClientApp:
                     format_timestamp(row.updated_at),
                     row.address,
                     row.data_type,
-                ),
-            )
-        if self._selected_key and self._selected_key in self._rows_by_key:
-            self._tree.selection_set(self._selected_key)
-            self._sync_selected_row(self._rows_by_key[self._selected_key])
+                )
+                if item_id in existing_ids:
+                    self._tree.item(item_id, values=values)
+                else:
+                    self._tree.insert("", "end", iid=item_id, values=values)
+
+            for item_id in existing_ids - next_ids:
+                self._tree.delete(item_id)
+
+            if self._selected_key and self._selected_key in self._rows_by_key:
+                self._tree.selection_set(self._selected_key)
+                self._sync_selected_row(self._rows_by_key[self._selected_key], preserve_inputs=True)
+            elif self._selected_key and self._selected_key not in self._rows_by_key:
+                self._selected_key = None
+                self.selected_register_var.set("Brak zaznaczenia")
+                self.current_value_var.set("-")
+        finally:
+            self._refreshing_tree = False
 
     def _on_tree_select(self, _event) -> None:
+        if self._refreshing_tree:
+            return
         if self._tree is None:
             return
         selection = self._tree.selection()
@@ -279,14 +299,15 @@ class LiveClientApp:
         self._selected_key = selection[0]
         row = self._rows_by_key.get(self._selected_key)
         if row is not None:
-            self._sync_selected_row(row)
+            self._sync_selected_row(row, preserve_inputs=False)
 
-    def _sync_selected_row(self, row: UiRow) -> None:
+    def _sync_selected_row(self, row: UiRow, preserve_inputs: bool) -> None:
         self.selected_register_var.set(f"{row.meter_name} / {row.register_name} ({row.register_id})")
         self.current_value_var.set(format_value(row.value))
-        self.control_target_var.set("" if row.target_value is None else str(row.target_value))
-        self.control_threshold_var.set("" if row.threshold_value is None else str(row.threshold_value))
-        self.activate_control_var.set(row.control_active)
+        if not preserve_inputs or not self._editing_control_inputs():
+            self.control_target_var.set("" if row.target_value is None else str(row.target_value))
+            self.control_threshold_var.set("" if row.threshold_value is None else str(row.threshold_value))
+            self.activate_control_var.set(row.control_active)
 
     def _apply_control(self) -> None:
         row = self._require_selected_row()
@@ -321,6 +342,10 @@ class LiveClientApp:
             messagebox.showerror("Sterowanie", "Wybrany rejestr nie jest juz dostepny.")
             return None
         return row
+
+    def _editing_control_inputs(self) -> bool:
+        focused = self.root.focus_get()
+        return focused in {self._target_entry, self._threshold_entry}
 
     def _refresh_config_async(self) -> None:
         self.backend_error_var.set("Refreshing configuration...")
