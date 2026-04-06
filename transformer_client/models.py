@@ -1,0 +1,194 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
+
+
+DEFAULT_CLIENT_CONFIG: dict[str, Any] = {
+    "backendUrl": "http://194.28.222.28:8080",
+    "email": "admin@admin",
+    "password": "ZAQ!2wsx",
+    "transformerId": "649bb8d7-6064-48ef-b062-711d6724fb9c",
+    "pollIntervalMs": 100,
+    "configRefreshMs": 5000,
+    "reconnectDelayMs": 3000,
+    "modbusTimeoutMs": 250,
+    "modbusRetries": 2,
+    "modbusDiscardDelayMs": 150,
+    "interRegisterDelayMs": 0,
+    "rememberCredentials": True,
+}
+
+
+@dataclass(slots=True)
+class ClientConfig:
+    backendUrl: str = DEFAULT_CLIENT_CONFIG["backendUrl"]
+    email: str = DEFAULT_CLIENT_CONFIG["email"]
+    password: str = DEFAULT_CLIENT_CONFIG["password"]
+    transformerId: str | None = DEFAULT_CLIENT_CONFIG["transformerId"]
+    pollIntervalMs: int = DEFAULT_CLIENT_CONFIG["pollIntervalMs"]
+    configRefreshMs: int = DEFAULT_CLIENT_CONFIG["configRefreshMs"]
+    reconnectDelayMs: int = DEFAULT_CLIENT_CONFIG["reconnectDelayMs"]
+    modbusTimeoutMs: int = DEFAULT_CLIENT_CONFIG["modbusTimeoutMs"]
+    modbusRetries: int = DEFAULT_CLIENT_CONFIG["modbusRetries"]
+    modbusDiscardDelayMs: int = DEFAULT_CLIENT_CONFIG["modbusDiscardDelayMs"]
+    interRegisterDelayMs: int = DEFAULT_CLIENT_CONFIG["interRegisterDelayMs"]
+    rememberCredentials: bool = DEFAULT_CLIENT_CONFIG["rememberCredentials"]
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "ClientConfig":
+        merged = {**DEFAULT_CLIENT_CONFIG, **payload}
+        return cls(
+            backendUrl=str(merged["backendUrl"]),
+            email=str(merged["email"]),
+            password=str(merged["password"]),
+            transformerId=merged["transformerId"] or None,
+            pollIntervalMs=int(merged["pollIntervalMs"]),
+            configRefreshMs=int(merged["configRefreshMs"]),
+            reconnectDelayMs=int(merged["reconnectDelayMs"]),
+            modbusTimeoutMs=int(merged["modbusTimeoutMs"]),
+            modbusRetries=int(merged["modbusRetries"]),
+            modbusDiscardDelayMs=int(merged["modbusDiscardDelayMs"]),
+            interRegisterDelayMs=int(merged["interRegisterDelayMs"]),
+            rememberCredentials=bool(merged["rememberCredentials"]),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "backendUrl": self.backendUrl,
+            "email": self.email,
+            "password": self.password,
+            "transformerId": self.transformerId,
+            "pollIntervalMs": self.pollIntervalMs,
+            "configRefreshMs": self.configRefreshMs,
+            "reconnectDelayMs": self.reconnectDelayMs,
+            "modbusTimeoutMs": self.modbusTimeoutMs,
+            "modbusRetries": self.modbusRetries,
+            "modbusDiscardDelayMs": self.modbusDiscardDelayMs,
+            "interRegisterDelayMs": self.interRegisterDelayMs,
+            "rememberCredentials": self.rememberCredentials,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class AuthResponse:
+    id: str
+    accessToken: str
+    refreshToken: str
+    role: str
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "AuthResponse":
+        return cls(
+            id=str(payload["id"]),
+            accessToken=str(payload["accessToken"]),
+            refreshToken=str(payload["refreshToken"]),
+            role=str(payload["role"]),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RefreshResponse:
+    accessToken: str
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "RefreshResponse":
+        return cls(accessToken=str(payload["accessToken"]))
+
+
+@dataclass(frozen=True, slots=True)
+class TransformerDto:
+    id: str
+    name: str
+    location: str | None
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "TransformerDto":
+        return cls(
+            id=str(payload["id"]),
+            name=str(payload["name"]),
+            location=payload.get("location"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class MeterDto:
+    id: int
+    name: str
+    deviceCode: str
+    enabled: bool
+    serialPort: str
+    baudRate: int
+    dataBits: int
+    parity: str
+    stopBits: int
+    slaveId: int
+    byteOrder: str
+    pollIntervalMs: int | None
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "MeterDto":
+        return cls(
+            id=int(payload["id"]),
+            name=str(payload["name"]),
+            deviceCode=str(payload["deviceCode"]),
+            enabled=bool(payload["enabled"]),
+            serialPort=str(payload["serialPort"]),
+            baudRate=int(payload["baudRate"]),
+            dataBits=int(payload["dataBits"]),
+            parity=str(payload["parity"]),
+            stopBits=int(payload["stopBits"]),
+            slaveId=int(payload["slaveId"]),
+            byteOrder=str(payload["byteOrder"]),
+            pollIntervalMs=int(payload["pollIntervalMs"]) if payload.get("pollIntervalMs") else None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RegisterDto:
+    id: int
+    meterId: int
+    name: str
+    registerType: str
+    address: int
+    length: int
+    dataType: str
+    scale: float | None
+    targetValue: float | None
+    thresholdValue: float | None
+    unit: str | None
+    enabled: bool
+    orderIndex: int | None
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "RegisterDto":
+        return cls(
+            id=int(payload["id"]),
+            meterId=int(payload["meterId"]),
+            name=str(payload["name"]),
+            registerType=str(payload["registerType"]),
+            address=int(payload["address"]),
+            length=int(payload["length"]),
+            dataType=str(payload["dataType"]),
+            scale=float(payload["scale"]) if payload.get("scale") is not None else None,
+            targetValue=float(payload["targetValue"]) if payload.get("targetValue") is not None else None,
+            thresholdValue=float(payload["thresholdValue"]) if payload.get("thresholdValue") is not None else None,
+            unit=payload.get("unit"),
+            enabled=bool(payload["enabled"]),
+            orderIndex=int(payload["orderIndex"]) if payload.get("orderIndex") is not None else None,
+        )
+
+
+@dataclass(slots=True)
+class RegisterState:
+    meterId: int
+    register: RegisterDto
+    value: float | None = None
+    lastUpdate: datetime | None = None
+
+
+class MeterStatus:
+    CONNECTING = "CONNECTING"
+    CONNECTED = "CONNECTED"
+    ERROR = "ERROR"

@@ -1,0 +1,14 @@
+{
+  "backendUrl": "http://194.28.222.28:8080",
+  "email": "admin@admin",
+  "password": "ZAQ!2wsx",
+  "transformerId": "649bb8d7-6064-48ef-b062-711d6724fb9c",
+  "pollIntervalMs": 100,
+  "configRefreshMs": 5000,
+  "reconnectDelayMs": 3000,
+  "modbusTimeoutMs": 250,
+  "modbusRetries": 2,
+  "modbusDiscardDelayMs": 150,
+  "interRegisterDelayMs": 0,
+  "rememberCredentials": true
+}
