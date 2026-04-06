@@ -18,7 +18,7 @@ DEFAULT_CLIENT_CONFIG: dict[str, Any] = {
     "modbusDiscardDelayMs": 150,
     "interRegisterDelayMs": 0,
     "rememberCredentials": True,
-    "controlLoopIntervalMs": 300,
+    "controlLoopIntervalMs": 100,
     "motorNoProgressTimeoutMs": 5000,
     "motorProgressEpsilon": 0.5,
     "metricsPublishMs": 500,

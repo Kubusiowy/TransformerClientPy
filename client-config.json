@@ -11,7 +11,7 @@
   "modbusDiscardDelayMs": 150,
   "interRegisterDelayMs": 0,
   "rememberCredentials": true,
-  "controlLoopIntervalMs": 300,
+  "controlLoopIntervalMs": 100,
   "motorNoProgressTimeoutMs": 5000,
   "motorProgressEpsilon": 0.5,
   "metricsPublishMs": 500,
