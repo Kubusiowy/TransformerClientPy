@@ -416,11 +416,11 @@ class MotorControlLoop:
 
     def _select_burst_steps(self, distance: float) -> int:
         if distance > 50:
-            return 50
+            return 8
         if distance > 20:
-            return 10
+            return 4
         if distance > 10:
-            return 3
+            return 2
         return 1
 
     def _set_motor(self, state_name: str, direction: str, message: str, burst_steps: int | None = None) -> None:
