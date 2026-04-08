@@ -18,6 +18,9 @@ class LiveClientApp:
         self.root.title("Transformer Client Live")
         self.root.geometry("1200x720")
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.root.bind_all("<MouseWheel>", self._on_mousewheel)
+        self.root.bind_all("<Button-4>", self._on_mousewheel)
+        self.root.bind_all("<Button-5>", self._on_mousewheel)
 
         self.backend_url_var = tk.StringVar(value=self.controller.config.backendUrl)
         self.email_var = tk.StringVar(value=self.controller.config.email)
@@ -45,6 +48,9 @@ class LiveClientApp:
         self._threshold_entry: ttk.Entry | None = None
         self._login_button: ttk.Button | None = None
         self._main_frame: ttk.Frame | None = None
+        self._scroll_canvas: tk.Canvas | None = None
+        self._scroll_frame: ttk.Frame | None = None
+        self._scroll_window_id: int | None = None
         self._rows_by_key: dict[str, UiRow] = {}
         self._selected_key: str | None = None
         self._refreshing_tree = False
@@ -65,8 +71,7 @@ class LiveClientApp:
         self.root.mainloop()
 
     def _build_login_view(self) -> None:
-        frame = ttk.Frame(self.root, padding=24)
-        frame.pack(fill="both", expand=True)
+        frame = self._create_scrollable_root_frame(padding=24)
         frame.columnconfigure(1, weight=1)
 
         ttk.Label(frame, text="Backend URL").grid(row=0, column=0, sticky="w", pady=6)
@@ -97,14 +102,7 @@ class LiveClientApp:
         )
 
     def _build_main_view(self) -> None:
-        if self._main_frame is not None:
-            self._main_frame.destroy()
-
-        for child in self.root.winfo_children():
-            child.destroy()
-
-        frame = ttk.Frame(self.root, padding=16)
-        frame.pack(fill="both", expand=True)
+        frame = self._create_scrollable_root_frame(padding=16)
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(6, weight=1)
         self._main_frame = frame
@@ -264,6 +262,80 @@ class LiveClientApp:
         self._tree = tree
 
         self._schedule_ui_refresh()
+
+    def _create_scrollable_root_frame(self, padding: int) -> ttk.Frame:
+        self._reset_root_view()
+
+        container = ttk.Frame(self.root)
+        container.pack(fill="both", expand=True)
+        container.columnconfigure(0, weight=1)
+        container.rowconfigure(0, weight=1)
+
+        canvas = tk.Canvas(container, highlightthickness=0, borderwidth=0)
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+
+        frame = ttk.Frame(canvas, padding=padding)
+        window_id = canvas.create_window((0, 0), window=frame, anchor="nw")
+        frame.bind("<Configure>", self._on_scroll_frame_configure)
+        canvas.bind("<Configure>", self._on_scroll_canvas_configure)
+
+        self._scroll_canvas = canvas
+        self._scroll_frame = frame
+        self._scroll_window_id = window_id
+        return frame
+
+    def _reset_root_view(self) -> None:
+        self._tree = None
+        self._main_frame = None
+        self._scroll_canvas = None
+        self._scroll_frame = None
+        self._scroll_window_id = None
+        for child in self.root.winfo_children():
+            child.destroy()
+
+    def _on_scroll_frame_configure(self, _event) -> None:
+        if self._scroll_canvas is None:
+            return
+        bounds = self._scroll_canvas.bbox("all")
+        if bounds is not None:
+            self._scroll_canvas.configure(scrollregion=bounds)
+
+    def _on_scroll_canvas_configure(self, event) -> None:
+        if self._scroll_canvas is None or self._scroll_frame is None or self._scroll_window_id is None:
+            return
+        self._scroll_canvas.itemconfigure(
+            self._scroll_window_id,
+            width=event.width,
+            height=max(self._scroll_frame.winfo_reqheight(), event.height),
+        )
+
+    def _on_mousewheel(self, event) -> None:
+        if self._scroll_canvas is None or self._widget_belongs_to_tree(event.widget):
+            return
+
+        if getattr(event, "num", None) == 4:
+            direction = -1
+        elif getattr(event, "num", None) == 5:
+            direction = 1
+        elif event.delta > 0:
+            direction = -1
+        elif event.delta < 0:
+            direction = 1
+        else:
+            return
+
+        self._scroll_canvas.yview_scroll(direction, "units")
+
+    def _widget_belongs_to_tree(self, widget: tk.Misc | None) -> bool:
+        current = widget
+        while current is not None:
+            if current is self._tree:
+                return True
+            current = getattr(current, "master", None)
+        return False
 
     def _start_login(self) -> None:
         backend_url = self.backend_url_var.get().strip()
