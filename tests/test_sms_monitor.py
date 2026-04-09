@@ -47,6 +47,21 @@ class TargetExceededSmsMonitorTests(unittest.TestCase):
         self.assertIn("Prog SMS: 10.00 C.", sent_messages[0])
         self.assertIn("Prog SMS: 11.00 C.", sent_messages[1])
 
+    def test_drop_below_threshold_resets_cooldown_and_allows_next_sms(self) -> None:
+        sent_messages: list[str] = []
+        monitor = TargetExceededSmsMonitor(
+            state=None,
+            get_config_copy=lambda: None,
+            send_callback=sent_messages.append,
+        )
+        config = ClientConfig(smsEnabled=True, smsApiKey="key", smsPhoneNumbers=["48123123123"], smsAlertCooldownMs=300000)
+
+        monitor._check_threshold_alerts([build_row(value=12.0, sms_threshold=10.0)], "T1", config)
+        monitor._check_threshold_alerts([build_row(value=8.0, sms_threshold=10.0)], "T1", config)
+        monitor._check_threshold_alerts([build_row(value=12.0, sms_threshold=10.0)], "T1", config)
+
+        self.assertEqual(len(sent_messages), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

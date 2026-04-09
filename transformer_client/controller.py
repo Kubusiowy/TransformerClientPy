@@ -108,6 +108,7 @@ class TargetExceededSmsMonitor:
                 self._was_above_limit = True
             else:
                 self._was_above_limit = False
+                self._last_sent_at_by_key.pop(key, None)
 
     def _check_threshold_alerts(self, rows, transformer_name: str, config) -> None:
         active_keys: set[tuple[int, int]] = set()
@@ -155,6 +156,7 @@ class TargetExceededSmsMonitor:
                 self._threshold_above_by_key[key] = True
             else:
                 self._threshold_above_by_key[key] = False
+                self._last_sent_at_by_key.pop(key, None)
 
         stale_keys = set(self._threshold_above_by_key) - active_keys
         for key in stale_keys:
