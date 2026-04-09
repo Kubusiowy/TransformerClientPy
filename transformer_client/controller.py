@@ -34,6 +34,7 @@ class TargetExceededSmsMonitor:
         self._was_above_limit = False
         self._last_sent_at_by_key: dict[tuple[int, int], float] = {}
         self._threshold_above_by_key: dict[tuple[int, int], bool] = {}
+        self._last_threshold_value_by_key: dict[tuple[int, int], float] = {}
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -54,6 +55,7 @@ class TargetExceededSmsMonitor:
                 self._last_key = None
                 self._was_above_limit = False
                 self._threshold_above_by_key.clear()
+                self._last_threshold_value_by_key.clear()
                 continue
 
             context = self.state.get_active_control_context()
@@ -114,9 +116,14 @@ class TargetExceededSmsMonitor:
             threshold_value = row.sms_alert_threshold_value
             if threshold_value is None or row.value is None:
                 self._threshold_above_by_key.pop(key, None)
+                self._last_threshold_value_by_key.pop(key, None)
                 continue
 
             active_keys.add(key)
+            previous_threshold_value = self._last_threshold_value_by_key.get(key)
+            if previous_threshold_value != threshold_value:
+                self._threshold_above_by_key[key] = False
+                self._last_threshold_value_by_key[key] = threshold_value
             delta = row.value - threshold_value
             if delta > 0:
                 if not self._threshold_above_by_key.get(key, False):
@@ -152,6 +159,7 @@ class TargetExceededSmsMonitor:
         stale_keys = set(self._threshold_above_by_key) - active_keys
         for key in stale_keys:
             self._threshold_above_by_key.pop(key, None)
+            self._last_threshold_value_by_key.pop(key, None)
 
 
 class LiveClientController:
