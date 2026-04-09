@@ -27,7 +27,7 @@ python3 -m pip install -r requirements.txt
 - Local configuration is loaded from `client-config.json`, with fallback to `resources/client-config.default.json`.
 - `register-control.json` stores local `targetValue` and `thresholdValue` per register. Only one register can be active for motor control at a time.
 - Motor control runs locally from live register value and executes `motorForwardCommand`, `motorReverseCommand` and `motorStopCommand`.
-- The repo now includes `DRV8825` helper scripts for `EN=GPIO24`, `STEP=GPIO23`, `DIR=GPIO22` using `pinctrl`.
+- The repo now includes `DRV8825` helper scripts for `EN=GPIO22`, `STEP=GPIO27`, `DIR=GPIO17` using `pinctrl`.
 - If `M0/M1/M2` are wired, set `motorM0Pin`, `motorM1Pin`, `motorM2Pin` and `motorMicrostepMode` in `client-config.json` for smoother NEMA17 motion.
 - One Modbus RTU session is created per serial port, exactly as required by the spec.
 - On Raspberry Pi / Linux the serial transport works without `pip`, using `termios` from Python standard library.

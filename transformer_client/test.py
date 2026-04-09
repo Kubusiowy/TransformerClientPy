@@ -1,9 +1,9 @@
 import subprocess
 import time
 
-EN = 24    # GPIO24
-DIR = 22   # GPIO22
-STEP = 23  # GPIO23
+EN = 22    # GPIO22
+DIR = 17   # GPIO17
+STEP = 27  # GPIO27
 
 DELAY = 0.01  # 10 ms
 

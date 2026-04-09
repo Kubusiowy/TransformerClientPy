@@ -1,8 +1,8 @@
 #!/bin/sh
 
-EN_PIN=24
-STEP_PIN=23
-DIR_PIN=22
+EN_PIN=22
+STEP_PIN=27
+DIR_PIN=17
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PID_FILE="$SCRIPT_DIR/.drv8825_step.pid"
 LOG_FILE="$SCRIPT_DIR/.drv8825_step.log"
