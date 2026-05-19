@@ -1,6 +1,6 @@
 #!/bin/sh
 
-EN_PIN=22
+EN_PIN=23
 STEP_PIN=27
 DIR_PIN=17
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)

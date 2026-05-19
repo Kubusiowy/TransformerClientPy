@@ -1,7 +1,7 @@
 import subprocess
 import time
 
-EN = 22    # GPIO22
+EN = 23    # GPIO23
 DIR = 17   # GPIO17
 STEP = 27  # GPIO27
 
