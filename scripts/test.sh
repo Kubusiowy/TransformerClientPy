@@ -1,4 +1,4 @@
-pinctrl set 23 op dl   # EN ON
+pinctrl set 22 op dl   # EN ON
 pinctrl set 17 op dh   # DIR
 
 for i in $(seq 1 300)
