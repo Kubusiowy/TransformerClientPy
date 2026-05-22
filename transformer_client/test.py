@@ -1,38 +1,27 @@
-import RPi.GPIO as GPIO
-import time
+from gpiozero import OutputDevice
+from time import sleep
 
-# PINY
 EN_PIN = 22
 DIR_PIN = 17
 STEP_PIN = 27
 
-# Ustawienie numeracji BCM
-GPIO.setmode(GPIO.BCM)
+en = OutputDevice(EN_PIN)
+dir = OutputDevice(DIR_PIN)
+step = OutputDevice(STEP_PIN)
 
-# Konfiguracja pinów
-GPIO.setup(EN_PIN, GPIO.OUT)
-GPIO.setup(DIR_PIN, GPIO.OUT)
-GPIO.setup(STEP_PIN, GPIO.OUT)
+# DRV8825: EN jest aktywne stanem LOW
+en.off()
 
-# Włączenie sterownika
-# EN w DRV8825 jest aktywne LOW
-GPIO.output(EN_PIN, GPIO.LOW)
-
-# Kierunek obrotu
-GPIO.output(DIR_PIN, GPIO.HIGH)
+# Kierunek
+dir.on()
 
 try:
     while True:
-
-        # Jeden krok
-        GPIO.output(STEP_PIN, GPIO.HIGH)
-        time.sleep(0.001)
-
-        GPIO.output(STEP_PIN, GPIO.LOW)
-        time.sleep(0.001)
+        step.on()
+        sleep(0.002)
+        step.off()
+        sleep(0.002)
 
 except KeyboardInterrupt:
-    print("Stop")
-
-finally:
-    GPIO.cleanup()
+    en.on()
+    print("Stop silnika")
