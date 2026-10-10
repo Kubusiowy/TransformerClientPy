@@ -355,10 +355,12 @@ class LiveClientApp:
                 self.controller.set_backend_url(backend_url)
                 self.controller.login(email, password, remember)
             except (BackendError, UnauthorizedError) as exc:
-                self.root.after(0, lambda: self._handle_login_error(str(exc)))
+                error_message = str(exc)
+                self.root.after(0, self._handle_login_error, error_message)
                 return
             except Exception as exc:
-                self.root.after(0, lambda: self._handle_login_error(f"Unexpected error: {exc}"))
+                error_message = f"Unexpected error: {exc}"
+                self.root.after(0, self._handle_login_error, error_message)
                 return
             self.root.after(0, self._handle_login_success)
 
@@ -562,7 +564,8 @@ class LiveClientApp:
             try:
                 result = self.controller.send_test_sms()
             except Exception as exc:
-                self.root.after(0, lambda: self.sms_status_var.set(f"SMS: blad - {exc}"))
+                error_message = f"SMS: blad - {exc}"
+                self.root.after(0, self.sms_status_var.set, error_message)
                 return
             self.root.after(0, lambda: self.sms_status_var.set(f"SMS: {result}"))
 
@@ -618,7 +621,8 @@ class LiveClientApp:
             try:
                 self.controller.refresh_configuration()
             except Exception as exc:
-                self.root.after(0, lambda: self.backend_error_var.set(str(exc)))
+                error_message = str(exc)
+                self.root.after(0, self.backend_error_var.set, error_message)
                 return
             self.root.after(0, lambda: self.backend_error_var.set(""))
 
