@@ -93,7 +93,10 @@ class ApplicationState:
                 for meter in meters
             }
             self._meter_errors = {meter.id: self._meter_errors.get(meter.id) for meter in meters}
-            self._controls = {key: value for key, value in controls.items() if key in next_states}
+            self._controls = {
+                key: value for key, value in controls.items()
+                if key in next_states or key == active_control_key
+            }
             self._active_control_key = active_control_key if active_control_key in self._controls else None
             self._last_backend_error = None
 
@@ -171,6 +174,10 @@ class ApplicationState:
     def clear_active_control(self) -> None:
         with self._lock:
             self._active_control_key = None
+
+    def has_active_control(self) -> bool:
+        with self._lock:
+            return self._active_control_key is not None
 
     def set_motor_state(self, state_name: str, direction: str, message: str) -> None:
         with self._lock:

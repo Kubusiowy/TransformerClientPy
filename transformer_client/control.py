@@ -109,9 +109,12 @@ class RegisterControlStore:
         self.save()
 
     def prune_missing(self, valid_keys: set[tuple[int, int]]) -> None:
-        self.controls = {key: value for key, value in self.controls.items() if key in valid_keys}
-        if self.active_key not in valid_keys:
-            self.active_key = None
+        # Keep the user's selection through temporary configuration gaps.
+        # Movement waits until that register is available with fresh readings.
+        self.controls = {
+            key: value for key, value in self.controls.items()
+            if key in valid_keys or key == self.active_key
+        }
         self.save()
 
 
@@ -223,7 +226,13 @@ class MotorControlLoop:
             context = self.state.get_active_control_context()
             if context is None:
                 self._reset_progress_tracking()
-                self._set_motor("IDLE", "STOPPED", "Brak aktywnego rejestru.")
+                if self.state.has_active_control():
+                    self._set_motor(
+                        "WAITING", "STOPPED",
+                        "Wybrany rejestr jest niedostepny, czekam na jego powrot.",
+                    )
+                else:
+                    self._set_motor("IDLE", "STOPPED", "Brak aktywnego rejestru.")
                 continue
             if context.current_value is None:
                 self._reset_progress_tracking()
@@ -266,11 +275,16 @@ class MotorControlLoop:
                 )
 
             if self._measurement_stale(context.last_update):
-                self._safety_stop(
+                # A read outage pauses movement, not the selected regulation.
+                # Fresh measurements will automatically resume corrections.
+                self._reset_progress_tracking()
+                self._set_motor(
+                    "WAITING",
+                    "STOPPED",
                     self._format_motor_message(
-                        "Safety stop: brak swiezego pomiaru",
+                        "Brak swiezego pomiaru, czekam na wznowienie odczytow",
                         context,
-                    )
+                    ),
                 )
                 continue
 
@@ -290,7 +304,7 @@ class MotorControlLoop:
                     self._set_motor(
                         "TARGET_REACHED",
                         "STOPPED",
-                        self._format_motor_message("Osiagnieto target", context),
+                        self._format_motor_message("Utrzymuje target, obserwuje pomiar", context),
                     )
                 continue
 
